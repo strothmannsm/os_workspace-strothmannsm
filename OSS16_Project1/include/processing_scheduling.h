@@ -22,4 +22,9 @@ typedef struct {
 // \return true if function ran successful else false for an error
 bool first_come_first_serve(dyn_array_t* ready_queue, ScheduleResult_t* result);
 
+// Runs the Round Robin Process Scheduling over the incoming ready_queue
+// \param ready queue a dyn_array of type ProcessControlBlock_t that contain be up to N elements 
+// \param result used for first come first serve stat tracking \ref ScheduleResult_t
+// \return true if function ran successful else false for an error
+bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result);
 #endif

@@ -1,31 +1,31 @@
-#OS_Workspace
+# OS_Workspace
 
 A repo of your very own!
 
-##Remote Setup:
+## Remote Setup:
 
 	git remote add upstream git@github.com:mizzoucs/OSSP16_Assignments.git
 
-##Remote Sync:
+## Remote Sync:
 
 Check for updates often! These updates will contain future assignments, milestones, example code, and bugfixes. **_Keeping your repository up to date is your responsibility._**
 
 	git fetch upstream
-	git merge upstream
+	git merge upstream/master
 
-##Additional Git Resources:
+## Additional Git Resources:
 
 * [Branch and Merge Docs](https://git-scm.com/book/en/v2/Git-Branching-Basic-Branching-and-Merging)
 * [Tag Docs](https://git-scm.com/book/en/v2/Git-Basics-Tagging)
 * [Google](https://google.com)
 
-##OS_Library!
+## OS_Library!
 
 	git clone git@github.com:mizzoucs/OS_Library.git
 	cd OS_Library && mkdir build && cd build
 	cmake .. && sudo make install && sudo ldconfig
 
-##Submission:
+## Submission:
 
 Tags will be used to track and download your submissions for grading. For an overview of tags, check out the [git tag docs](https://git-scm.com/book/en/v2/Git-Basics-Tagging). To submit, you will need to have the submission tag for the assignment/milestone. The submission tag can most likely be found on the assignment document or the project readme.
 
@@ -37,12 +37,8 @@ to create a tag of your current commit, and push it to github with
 
 	git push origin <TAG>
 
-###/!\ WARNING /!\
 
-Be wary of force pushing! Changing your commit history can be dangerous, especially when working in teams. Rewriting history that has already been submitted may cause future submissions to be rejected!
-
-
-##Updating Your Submission:
+## Updating Your Submission:
 
 If you want to update your tagged version, first delete old tag with
 
