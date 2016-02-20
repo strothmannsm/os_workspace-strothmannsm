@@ -59,6 +59,45 @@ bool first_come_first_serve(dyn_array_t* ready_queue, ScheduleResult_t* result) 
 }
 
 bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result) {
-	return true;
+
+	if(ready_queue && result) {
+		size_t n_proc = dyn_array_size(ready_queue); //find out how many processes are in queue
+		uint32_t clocktime = 0; // initialize clocktime
+		size_t i = 0;
+		float avg_latency = 0.0;
+		float avg_wallclock = 0.0;
+
+		while(dyn_array_size(ready_queue) > 0) {
+			ProcessControlBlock_t pcb;
+			if(dyn_array_extract_back(ready_queue, &pcb)) {
+				if(i < n_proc) {
+					avg_latency += clocktime;
+					i++;
+				}
+				int j = 0;
+				while(j < QUANTUM && pcb.remaining_burst_time > 0) {
+					virtual_cpu(&pcb);
+					++clocktime;
+					++j;
+				}
+
+				if(pcb.remaining_burst_time > 0) {
+					dyn_array_push_front(ready_queue, &pcb);
+				} else {
+					avg_wallclock += clocktime;
+				}
+			} else {
+				return false;
+			}
+		}
+
+		result->average_latency_time = avg_latency/n_proc;
+		result->average_wall_clock_time = avg_wallclock/n_proc;
+		result->total_run_time = clocktime;
+
+		return true;
+	}
+
+	return false;
 }
 
