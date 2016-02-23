@@ -63,17 +63,27 @@ bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result) {
 	if(ready_queue && result) {
 		size_t n_proc = dyn_array_size(ready_queue); //find out how many processes are in queue
 		uint32_t clocktime = 0; // initialize clocktime
-		size_t i = 0;
+		size_t i = 0; // helper for latency
 		float avg_latency = 0.0;
 		float avg_wallclock = 0.0;
 
+		/* While there are processess in the ready_queue
+		*  	-extract the process from the "head"
+		*  	-get latency, if not already calculated
+		*  	-Run the process on the virtual_cpu for QUANTUM time
+		*  		or until it completes, whichever comes first
+		*  	-if it didn't complete put it at the "back" of the queue
+		*  		else get wallclock 
+		*/
 		while(dyn_array_size(ready_queue) > 0) {
 			ProcessControlBlock_t pcb;
 			if(dyn_array_extract_back(ready_queue, &pcb)) {
-				if(i < n_proc) {
+				// when i = n_proc, all latencies have been calculated
+				if(i < n_proc) { 
 					avg_latency += clocktime;
 					i++;
 				}
+				
 				int j = 0;
 				while(j < QUANTUM && pcb.remaining_burst_time > 0) {
 					virtual_cpu(&pcb);
@@ -91,6 +101,7 @@ bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result) {
 			}
 		}
 
+		// put final timing results in result
 		result->average_latency_time = avg_latency/n_proc;
 		result->average_wall_clock_time = avg_wallclock/n_proc;
 		result->total_run_time = clocktime;
