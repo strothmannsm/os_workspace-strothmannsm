@@ -69,6 +69,8 @@ bool first_come_first_serve(dyn_array_t* ready_queue, ScheduleResult_t* result) 
 	result->average_latency_time = avg_latency;
 	result->average_wall_clock_time = avg_wallclock;
 	result->total_run_time = clocktime;
+
+	return true;
 }
 
 bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result) {
@@ -137,6 +139,5 @@ void* first_come_first_serve_worker (void* input) {
 
 void* round_robin_worker (void* input) {
 	
->>>>>>> upstream/master
 }
 
