@@ -19,7 +19,8 @@ typedef struct {
 // Create and Define worker input struct
 // that is needed for thread worker function below
 typedef struct {
-	
+	dyn_array_t* ready_queue;
+	ScheduleResult_t* result;
 } WorkerInput_t;
 
 
