@@ -6,7 +6,6 @@
 #include <string.h>
 
 int main(int argc, char** argv) {
-	printf("%s\n",argv[2]);
 	if(argc < 3) {
 		printf("args\n");
 		return -1;
