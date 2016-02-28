@@ -16,6 +16,7 @@ void virtual_cpu(ProcessControlBlock_t* process_control_block) {
 	// decrement the burst time of the pcb
 	--process_control_block->remaining_burst_time;
 	sleep(1);
+
 }
 
 void destroy_mutex (void) {
@@ -37,7 +38,10 @@ bool first_come_first_serve(dyn_array_t* ready_queue, ScheduleResult_t* result) 
 		return false;
 	}
 
+	pthread_mutex_lock(&mutex);
 	size_t n_proc = dyn_array_size(ready_queue); //find out how many processes are in queue
+	pthread_mutex_unlock(&mutex);
+	
 	uint32_t clocktime = 0; // initialize clocktime
 	float avg_latency = 0;
 	float avg_wallclock = 0;
@@ -46,7 +50,10 @@ bool first_come_first_serve(dyn_array_t* ready_queue, ScheduleResult_t* result) 
 	*  extract the PCB from the back and run it on the CPU
 	*  until it's done.
 	*/
-	while(dyn_array_size(ready_queue) > 0) {
+	pthread_mutex_lock(&mutex);
+	size_t size = dyn_array_size(ready_queue);
+	pthread_mutex_unlock(&mutex);
+	while(size > 0) {
 		ProcessControlBlock_t pcb;
 
 		pthread_mutex_lock(&mutex);
@@ -54,7 +61,10 @@ bool first_come_first_serve(dyn_array_t* ready_queue, ScheduleResult_t* result) 
 		pthread_mutex_unlock(&mutex);
 
 		if(res) {
-			avg_latency += clocktime; // process headed to cpu, add latency
+			if(pcb.started == 0) {
+				avg_latency += clocktime; // process headed to cpu, add latency
+				pcb.started = clocktime + 1;
+			}
 			// run process until completed
 			while(pcb.remaining_burst_time > 0) {
 				virtual_cpu(&pcb);
@@ -64,8 +74,11 @@ bool first_come_first_serve(dyn_array_t* ready_queue, ScheduleResult_t* result) 
 		} else {
 			return false; // failed to extract pcb from queue
 		}
-	}
+		pthread_mutex_lock(&mutex);
+		size = dyn_array_size(ready_queue);
+		pthread_mutex_unlock(&mutex);
 
+	}	
 	// average out latency and wallclock
 	avg_latency /= n_proc;
 	avg_wallclock /= n_proc;
@@ -81,9 +94,11 @@ bool first_come_first_serve(dyn_array_t* ready_queue, ScheduleResult_t* result) 
 bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result) {
 
 	if(ready_queue && result) {
+		pthread_mutex_lock(&mutex);
 		size_t n_proc = dyn_array_size(ready_queue); //find out how many processes are in queue
+		pthread_mutex_unlock(&mutex);
+		
 		uint32_t clocktime = 0; // initialize clocktime
-		size_t i = 0; // helper for latency
 		float avg_latency = 0.0;
 		float avg_wallclock = 0.0;
 
@@ -95,7 +110,11 @@ bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result) {
 		*  	-if it didn't complete put it at the "back" of the queue
 		*  		else get wallclock 
 		*/
-		while(dyn_array_size(ready_queue) > 0) {
+		pthread_mutex_lock(&mutex);
+		size_t size = dyn_array_size(ready_queue);
+		pthread_mutex_unlock(&mutex);
+		
+		while(size > 0) {
 			ProcessControlBlock_t pcb;
 
 			pthread_mutex_lock(&mutex);
@@ -103,10 +122,10 @@ bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result) {
 			pthread_mutex_unlock(&mutex);
 
 			if(res) {
-				// when i = n_proc, all latencies have been calculated
-				if(i < n_proc) { 
+
+				if(pcb.started == 0) {
 					avg_latency += clocktime;
-					i++;
+					pcb.started = clocktime + 1;
 				}
 				
 				int j = 0;
@@ -117,15 +136,19 @@ bool round_robin(dyn_array_t* ready_queue, ScheduleResult_t* result) {
 				}
 
 				if(pcb.remaining_burst_time > 0) {
+					pthread_mutex_lock(&mutex);
 					dyn_array_push_front(ready_queue, &pcb);
+					pthread_mutex_unlock(&mutex);
 				} else {
 					avg_wallclock += clocktime;
 				}
 			} else {
 				return false;
 			}
+			pthread_mutex_lock(&mutex);
+			size = dyn_array_size(ready_queue);
+			pthread_mutex_unlock(&mutex);
 		}
-
 		// put final timing results in result
 		result->average_latency_time = avg_latency/n_proc;
 		result->average_wall_clock_time = avg_wallclock/n_proc;
