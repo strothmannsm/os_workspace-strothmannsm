@@ -156,6 +156,7 @@ TEST(bs_request_release, fbm_attack) {
         ASSERT_FALSE(back_store_read(bs, i, buffer));
         ASSERT_FALSE(back_store_write(bs, i, buffer));
     }
+    back_store_close(bs);
     score += 6;
 }
 
@@ -165,6 +166,8 @@ TEST(bs_request, fill_device) {
         ASSERT_TRUE(back_store_request(bs, i));
     }
     ASSERT_EQ(back_store_allocate(bs), 0);
+
+    back_store_close(bs);
     score += 6;
 }
 

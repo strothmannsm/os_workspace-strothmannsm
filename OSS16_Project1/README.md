@@ -18,3 +18,5 @@
 ./process_analysis PCBs.bin FCFS FCFS FCFS RR RR  0.01s user 0.00s system 0% cpu 49.062 total
 
 ./process_analysis PCBs.bin FCFS FCFS RR RR RR RR  0.00s user 0.01s system 0% cpu 40.048 total
+./process_analysis PCBs.bin RR RR RR RR RR RR RR RR RR RR RR RR RR FCFS  0.00s user 0.01s system 0% cpu 21.029 total
+./process_analysis PCBs.bin RR RR RR RR RR RR RR RR RR RR RR RR RR FCFS FCFS   0.00s user 0.01s system 0% cpu 18.023 total
