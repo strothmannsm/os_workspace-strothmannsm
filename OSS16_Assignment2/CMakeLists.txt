@@ -15,4 +15,3 @@ target_link_libraries(project_test ${bitmap_lib} ${GTEST_LIBRARIES} pthread)
 enable_testing()
 add_test(NAME    project_test 
          COMMAND project_test)
-

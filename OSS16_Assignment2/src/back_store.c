@@ -85,26 +85,7 @@ back_store_t *back_store_open(const char *const fname) {
     //get bitmap_data from file
     uint8_t bitmap_data[FBM_BYTES];
     read(bs->fd, bitmap_data, FBM_BYTES);
-/*
-    size_t bytes_will_read = FBM_BYTES;
-    ssize_t bytes_read = 0;
-    size_t bytes_have_read = 0;
-    do {
-        bytes_read = read(bs->fd, (bitmap_data + bytes_have_read), bytes_will_read);
-        if(bytes_read == -1) {
-            //more error handling
-            if(errno == EINTR) {
-                printf("Interrupted: Attempting to read again\n");
-                continue;
-            } else {
-                printf("\nbad read\n\n");
-                continue;
-            }
-        }
-        bytes_will_read -= bytes_read;
-        bytes_have_read += bytes_read;
-    } while (bytes_will_read);
-*/
+
     //import the bitmap data into a new bitmap_t
     bs->fbm = bitmap_import(NUM_BLOCKS, bitmap_data);
     if(bs->fbm == NULL) {
@@ -134,28 +115,7 @@ void back_store_close(back_store_t *const bs) {
 
     //write out fbm data to file
     write(bs->fd, bitmap_data, FBM_BYTES);
-/*
-    for(unsigned i = 0; i < FBM_BLOCKS; i++) {
-        size_t bytes_will_write = BLOCK_SIZE;
-        size_t bytes_have_written = 0;
-        ssize_t bytes_written = 0;
-        do {
-            bytes_written = write(bs->fd, (bitmap_data + bytes_have_written + (i * BLOCK_SIZE)), BLOCK_SIZE);
-            if(bytes_written == -1) {
-                //more error handling
-                if(errno == EINTR) {
-                    printf("Interrupted: Attempting to write again\n");
-                    continue;
-                } else {
-                    printf("\nbad write\n\n");
-                    continue;
-                }
-            }
-            bytes_will_write -= bytes_written;
-            bytes_have_written += bytes_written;
-        } while (bytes_will_write);
-    }
-*/
+
     //close the file, destroy the bitmap, and free heap memory
     close(bs->fd);
     bitmap_destroy(bs->fbm);
@@ -242,26 +202,7 @@ bool back_store_read(back_store_t *const bs, const unsigned block_id, void *cons
 
     //read the block into dst
     read(bs->fd, (uint8_t*)dst, BLOCK_SIZE);
-/*
-    size_t bytes_will_read = BLOCK_SIZE;
-    ssize_t bytes_read = 0;
-    size_t bytes_have_read = 0;
-    do {
-        bytes_read = read(bs->fd, ((uint8_t*)dst + bytes_have_read), bytes_will_read);
-        if(bytes_read == -1) {
-            //more error handling
-            if(errno == EINTR) {
-                printf("Interrupted: Attempting to read again\n");
-                continue;
-            } else {
-                printf("\nbad read\n\n");
-                continue;
-            }
-        }
-        bytes_will_read -= bytes_read;
-        bytes_have_read += bytes_read;
-    } while (bytes_will_read);
-*/
+
     return true;
 }
 
@@ -282,28 +223,7 @@ bool back_store_write(back_store_t *const bs, const unsigned block_id, const voi
     lseek(bs->fd, block_id*BLOCK_SIZE, SEEK_SET);
 
     //write src out to block
-    
     write(bs->fd, (const uint8_t*)src, BLOCK_SIZE);
     
-/*
-	size_t bytes_will_write = BLOCK_SIZE;
-    size_t bytes_have_written = 0;
-    ssize_t bytes_written = 0;
-    do {
-        bytes_written = write(bs->fd, ((const uint8_t*)src + bytes_have_written), BLOCK_SIZE);
-        if(bytes_written == -1) {
-            //more error handling
-            if(errno == EINTR) {
-                printf("Interrupted: Attempting to write again\n");
-                continue;
-            } else {
-                printf("\nbad write\n\n");
-                continue;
-            }
-        }
-        bytes_will_write -= bytes_written;
-        bytes_have_written += bytes_written;
-    } while (bytes_will_write);
-*/
     return true;
 }
