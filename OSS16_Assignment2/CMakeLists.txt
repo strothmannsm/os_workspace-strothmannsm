@@ -12,6 +12,8 @@ set(CMAKE_C_FLAGS "-std=c99 -Wall -Wextra -Wshadow -Werror -g -D_XOPEN_SOURCE=50
 add_executable(project_test test/tests.cpp)
 target_link_libraries(project_test ${bitmap_lib} ${GTEST_LIBRARIES} pthread)
 
+add_library(back_store SHARED src/back_store.c include/back_store.h)
+
 enable_testing()
 add_test(NAME    project_test 
          COMMAND project_test)

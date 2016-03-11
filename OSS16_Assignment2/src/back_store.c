@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdbool.h>
+#include <unistd.h>
 #include <errno.h>
 #include <bitmap.h>
 #include "../include/back_store.h"
@@ -53,6 +54,13 @@ back_store_t *back_store_create(const char *const fname) {
     //set first bits in bitmap to reserve blocks for FBM
     for(unsigned i = 0; i < FBM_BLOCKS; i++) {
         bitmap_set(bs->fbm, i);
+    }
+
+    //initialize all blocks
+    uint8_t block[BLOCK_SIZE];
+    memset(block, 0x00, BLOCK_SIZE);
+    for(unsigned i = 0; i < NUM_BLOCKS; i++) {
+        write(bs->fd, block, BLOCK_SIZE);
     }
 
     return bs;
@@ -140,8 +148,8 @@ unsigned back_store_allocate(back_store_t *const bs) {
         return 0; //no free blocks
     }
 
-    //send to back_store_request to create and write the new block
-    back_store_request(bs, block_id);
+    //set the bit in the fbm
+    bitmap_set(bs->fbm, block_id);
 
     return block_id;
 }
@@ -158,13 +166,8 @@ bool back_store_request(back_store_t *const bs, const unsigned block_id) {
         return false;
     }
 
-    //creata a block and initialize to 0
-    uint8_t block[BLOCK_SIZE];
-    memset(block, 0x00, BLOCK_SIZE);
-
-    //set the bit in the fbm and write out the new block
+    //set the bit in the fbm
     bitmap_set(bs->fbm, block_id);
-    back_store_write(bs, block_id, block);
 
     return true;
 }
