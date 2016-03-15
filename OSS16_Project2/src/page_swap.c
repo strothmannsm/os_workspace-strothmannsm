@@ -292,12 +292,10 @@ unsigned char bit_count(unsigned char value) {
  * */
 bool read_from_back_store (void *data, const unsigned int page) {
 
-	if(data || page < MAX_PAGE_TABLE_ENTRIES_SIZE) {
+	if(data && page < MAX_PAGE_TABLE_ENTRIES_SIZE) {
 		unsigned int mapped_page = BS_PAGE_MAP(page);
 		if(back_store_read(ps.bs, mapped_page, data)) {
 			return true;
-		} else {
-			fputs("FAILED TO READ FROM BACK STORE",stderr);
 		}
 	}
 	return false;
@@ -305,12 +303,10 @@ bool read_from_back_store (void *data, const unsigned int page) {
 
 bool write_to_back_store (const void *data, const unsigned int page) {
 
-	if(data || page < MAX_PAGE_TABLE_ENTRIES_SIZE) {
+	if(data && page < MAX_PAGE_TABLE_ENTRIES_SIZE) {
 		unsigned int mapped_page = BS_PAGE_MAP(page);
 		if(back_store_write(ps.bs, mapped_page, data)) {
 			return true;
-		} else {
-			fputs("FAILED TO WRITE TO BACK STORE",stderr);
 		}
 	}
 	return false;
