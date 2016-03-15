@@ -1,9 +1,6 @@
 # Ignore the build directory
 
-build/*
-
-# and in case you did something weird
-*/build/*
+**/build
 
 ###C###
 
