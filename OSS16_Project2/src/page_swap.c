@@ -68,7 +68,26 @@ back_store_t* bs;
 // swap algorithms
 static page_swap_t ps;
 
-// helper function to count bits for LFU
+typedef enum {ALRU, LFU} SWAP_MODE;
+
+/*
+ * This function does the work.
+ * SWAP_MODE determines how to choose a victim frame if page fault occurs
+ * Didn't want to write entire algorithm twice with the
+ * only difference being one small block in the middle.
+ * Instead approx_least_recently_used and least_frequently_used
+ * simply call this function with their own SWAP_MODE to tell
+ * which method to use to choose a victim frame.
+ * */
+page_request_result_t* page_swap(const SWAP_MODE mode, const uint16_t page_number, const size_t clock_time);
+
+/*
+ * Modularized victim choosing methods to simplify
+ * */
+unsigned int choose_alru_victim_frame(void);
+unsigned int choose_lfu_victim_frame(void);
+
+// helper function to count set bits for LFU
 unsigned char bit_count(unsigned char value);
 
 // function to populate and fill your frame table and page tables
@@ -134,75 +153,8 @@ void destroy(void) {
 /*
  * ALRU IMPLEMENTATION : TODO IMPLEMENT
  * */
-
-page_request_result_t* approx_least_recently_used (const uint16_t page_number, const size_t clock_time) {		
-	page_request_result_t* page_req_result = NULL;
-
-	//make sure page_number is valid
-	if(page_number < MAX_PAGE_TABLE_ENTRIES_SIZE) {
-		// this is the page being requested
-		page_t* page = &ps.page_table.entries[page_number];
-		// this is the frame which may (or not) contain the page depending on valid bit
-		frame_t* frame = &ps.frame_table.entries[page->frame_table_idx];
-
-		// check page valid bit
-		if(!page->valid) {
-			// now we page swap, start with a result structure
-			page_req_result = (page_request_result_t*)malloc(sizeof(page_request_result_t));
-			page_req_result->page_requested = page_number;
-
-			// choose victim frame, for ALRU victim = minimum value of access byte
-			frame = &ps.frame_table.entries[0]; // start with the first frame
-			unsigned char min = frame->access_tracking_byte; // initialize min and victim frame#
-			unsigned int victim_frame_idx = 0;
-			// for each frame, if access_tracking_byte < min, change min and victim
-			for(int i = 1; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
-				if(frame->access_tracking_byte < min) {
-					min = frame->access_tracking_byte;
-					victim_frame_idx = i;
-				}
-			}
-			// point frame back to the victim frame
-			frame = &ps.frame_table.entries[victim_frame_idx];
-			// set rest of result struct
-			page_req_result->frame_replaced = victim_frame_idx;
-			page_req_result->page_replaced = frame->page_table_idx;
-
-			// write out the current frame contents to the back store
-			write_to_back_store(&frame->data, frame->page_table_idx);
-
-			// read requested page contents from backing store into frame
-			read_from_back_store(&frame->data, page_number);
-
-			// update page table entry for requested page
-			page->frame_table_idx = victim_frame_idx;
-			page->valid = 1;
-
-			// invalidate old page
-			ps.page_table.entries[frame->page_table_idx].valid = 0;
-
-			// update frame's page number
-			frame->page_table_idx = page_number;
-		}
-
-		// set MSB of frame access bit
-		frame->access_bit = 128;
-
-		// after every TIME_INTERVAL, manage access pattern
-		if(clock_time % TIME_INTERVAL == 0) {
-			frame = &ps.frame_table.entries[0];
-			for (int i = 0; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
-				// shift tracking byte
-				frame->access_tracking_byte >>= 1;
-				// set MSB of tracking byte
-				frame->access_tracking_byte |= frame->access_bit;
-				// reset access_bit
-				frame->access_bit = 0;
-			}
-		}
-	}
-
-	return page_req_result;
+page_request_result_t* approx_least_recently_used (const uint16_t page_number, const size_t clock_time) {	
+	return page_swap(ALRU, page_number, clock_time);
 }
 
 
@@ -210,104 +162,160 @@ page_request_result_t* approx_least_recently_used (const uint16_t page_number, c
  * LFU IMPLEMENTATION : TODO IMPLEMENT
  * */
 page_request_result_t* least_frequently_used (const uint16_t page_number, const size_t clock_time) {
-	page_request_result_t* page_req_result = NULL;
-
-	// make sure page_number is valid
-	if(page_number < MAX_PAGE_TABLE_ENTRIES_SIZE) {
-		// this is the page being requested
-		page_t* page = &ps.page_table.entries[page_number];
-		// this is the frame which may (or not) contain the page depending on valid bit
-		frame_t* frame = &ps.frame_table.entries[page->frame_table_idx];
-
-		// check page valid bit
-		if(!page->valid) {
-			// now we page swap, start with a result structure
-			page_req_result = (page_request_result_t*)malloc(sizeof(page_request_result_t));
-			page_req_result->page_requested = page_number;
-
-			// choose victim frame, for LFU victim = minimum bit_count of access byte
-			frame = &ps.frame_table.entries[0]; // start with the first frame
-			unsigned char min = bit_count(frame->access_tracking_byte); // initialize min and victim frame#
-			unsigned int victim_frame_idx = 0;
-			// for each frame, if bit_count(access_tracking_byte) < min, change min and victim			
-			for(int i = 1; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
-				if(bit_count(frame->access_tracking_byte) < min) {
-					min = bit_count(frame->access_tracking_byte);
-					victim_frame_idx = i;
-				}
-			}
-			// point frame back to victim frame
-			frame = &ps.frame_table.entries[victim_frame_idx];
-			// set rest of result struct
-			page_req_result->frame_replaced = victim_frame_idx;
-			page_req_result->page_replaced = frame->page_table_idx;
-
-			// write out the current frame contents to the back store
-			write_to_back_store(&frame->data, frame->page_table_idx);
-
-			// read requested page contents from backing store into frame
-			read_from_back_store(&frame->data, page_number);
-
-			// update page table entry for requested page
-			page->frame_table_idx = victim_frame_idx;
-			page->valid = 1;
-
-			// invalidate old page
-			ps.page_table.entries[frame->page_table_idx].valid = 0;
-
-			// update frame's page number
-			frame->page_table_idx = page_number;
-		}
-
-		// set MSB of frame access bit
-		frame->access_bit = 128;
-
-		// after every TIME_INTERVAL, manage access pattern
-		if(clock_time % TIME_INTERVAL == 0) {
-			frame = &ps.frame_table.entries[0];
-			for (int i = 0; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
-				// shift tracking byte
-				frame->access_tracking_byte >>= 1;
-				// set MSB of tracking byte
-				frame->access_tracking_byte |= frame->access_bit;
-				// reset access_bit
-				frame->access_bit = 0;
-			}
-		}
-	}
-
-	return page_req_result;
-}
-
-unsigned char bit_count(unsigned char value) {
-	unsigned char count;
-	// increments count for every bit set in value
-	for(count = 0; value != 0; value &= value - 1, count++);
-
-	return count;
+	return page_swap(LFU, page_number, clock_time);
 }
 
 /*
  * BACK STORE WRAPPER FUNCTIONS: TODO IMPLEMENT
  * */
 bool read_from_back_store (void *data, const unsigned int page) {
-
+	// make sure data isn't null and page is valid
 	if(data && page < MAX_PAGE_TABLE_ENTRIES_SIZE) {
+		// page numbers are mapped to backing store blocks
 		unsigned int mapped_page = BS_PAGE_MAP(page);
-		if(back_store_read(ps.bs, mapped_page, data)) {
-			return true;
-		}
+		// back_store_read returns bool for success or failure
+		return back_store_read(ps.bs, mapped_page, data);
 	}
+	// invalid inputs
 	return false;
 }
 
 bool write_to_back_store (const void *data, const unsigned int page) {
-
+	// make sure data isn't null and page is valid
 	if(data && page < MAX_PAGE_TABLE_ENTRIES_SIZE) {
+		// page numbers are mapped to backing store blocks
 		unsigned int mapped_page = BS_PAGE_MAP(page);
-		if(back_store_write(ps.bs, mapped_page, data)) {
-			return true;
+		// back_store_write returns bool for success or failure
+		return back_store_write(ps.bs, mapped_page, data);
+	}
+	// invalid inputs
+	return false;
+}
+
+page_request_result_t* page_swap(const SWAP_MODE mode, const uint16_t page_number, const size_t clock_time) {
+	page_request_result_t* page_req_result = NULL;
+
+	//make sure page_number is valid
+	if(page_number < MAX_PAGE_TABLE_ENTRIES_SIZE) {
+		// get the page being requested from the page table
+		page_t* page = &ps.page_table.entries[page_number];
+		// get the page's frame from the frame table
+		frame_t* frame = &ps.frame_table.entries[page->frame_table_idx];
+
+		// check if the page's frame is valid
+		if(!page->valid) {
+			// PAGE FAULT: need to do a page swap
+
+			// create a result struct
+			page_req_result = (page_request_result_t*)malloc(sizeof(page_request_result_t));
+			page_req_result->page_requested = page_number;
+
+			// choose a victim frame based on the mode called
+			unsigned int victim_frame_idx;
+			if(mode == ALRU) {
+				victim_frame_idx = choose_alru_victim_frame();
+			} else {
+				victim_frame_idx = choose_lfu_victim_frame();
+			}
+
+			// point frame back to the victim frame and fill rest of result struct
+			frame = &ps.frame_table.entries[victim_frame_idx];
+			page_req_result->frame_replaced = victim_frame_idx;
+			page_req_result->page_replaced = frame->page_table_idx;
+
+			/* 
+			 * ACTUAL PAGE SWAP:
+			 * 		1. write out the frame's old contents to the backing store
+			 *		2. read in the requested page to the frame
+			 * */
+			if(!write_to_back_store(&frame->data, frame->page_table_idx)) {
+				free(page_req_result);
+				return NULL;
+			}
+			if(!read_from_back_store(&frame->data, page_number)) {
+				free(page_req_result);
+				return NULL;
+			}
+
+			/*
+			 * Update Page and Frame Tables:
+			 * 		1. update page's frame number in page table
+			 *		2. set to valid
+			 *		3. invalidate the frame's old page
+			 *		4. update frame's page number
+			 * */
+			page->frame_table_idx = victim_frame_idx;
+			page->valid = 1;
+			ps.page_table.entries[frame->page_table_idx].valid = 0;
+			frame->page_table_idx = page_number;
+		}
+
+		// set MSB of frame access bit 
+		// (use MSB for easier transfer into access_tracking_byte)
+		frame->access_bit = 128;
+
+		// after every TIME_INTERVAL, manage access pattern
+		if(clock_time != 0 && clock_time % TIME_INTERVAL == 0) {
+			// start with first frame
+			frame = &ps.frame_table.entries[0];
+			/* 
+			 * for every frame
+			 * 		1. right-shift access_tracking_byte 1 bit position
+			 * 		2. set MSB of tracking byte = access_bit (this is why use MSB of access_bit)
+			 * 		3. reset access_bit
+			 * */
+			for (int i = 0; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
+				frame->access_tracking_byte >>= 1;
+				frame->access_tracking_byte |= frame->access_bit;
+				frame->access_bit = 0;
+			}
 		}
 	}
-	return false;
+
+	// if page_number requested isn't valid, result will be null
+	// if page's frame is valid, result will be null
+	// if page's frame wasn't valid, we did a page swap and filled result
+	return page_req_result;
+}
+
+unsigned int choose_alru_victim_frame(void) {
+	// choose victim frame, victim = minimum value of access_tracking_byte
+	frame_t* frame = &ps.frame_table.entries[0]; // start with the first frame
+	unsigned char min = frame->access_tracking_byte; // initialize min and victim frame#
+	unsigned int victim_frame_idx = 0;
+	// for each frame, if access_tracking_byte < min, change min and victim
+	for(int i = 1; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
+		if(frame->access_tracking_byte < min) {
+			min = frame->access_tracking_byte;
+			victim_frame_idx = i;
+		}
+	}
+
+	return victim_frame_idx;
+}
+
+unsigned int choose_lfu_victim_frame(void) {
+	// choose victim frame, victim = minimum bit_count of access_tracking_byte
+	frame_t* frame = &ps.frame_table.entries[0]; // start with the first frame
+	unsigned char min = bit_count(frame->access_tracking_byte); // initialize min and victim frame#
+	unsigned int victim_frame_idx = 0;
+	// for each frame, if bit_count(access_tracking_byte) < min, change min and victim			
+	for(int i = 1; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
+		if(bit_count(frame->access_tracking_byte) < min) {
+			min = bit_count(frame->access_tracking_byte);
+			victim_frame_idx = i;
+		}
+	}
+
+	return victim_frame_idx;
+}
+
+unsigned char bit_count(unsigned char value) {
+	unsigned char count;
+	// increments count for every bit set in value
+	// value &= value - 1 clears the least significant 1 bit
+	// loop increments count until value == 0 (no more set bits)
+	for(count = 0; value != 0; value &= value - 1, count++);
+
+	return count;
 }
