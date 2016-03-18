@@ -28,9 +28,9 @@ TEST (ALRU, BadInput) {
 	initialize();
 
 	page_request_result_t* par = approx_least_recently_used(2048,100);
-	EXPECT_EQ(NULL,par);
+	ASSERT_EQ(NULL,par);
 	par = approx_least_recently_used(2049,100);
-	EXPECT_EQ(NULL,par);
+	ASSERT_EQ(NULL,par);
 
 	destroy();
 	score+=5;
@@ -55,7 +55,7 @@ TEST (ALRU, GoodInputNoPageFaults) {
 			free(prr);
 		}
 	}
-	EXPECT_EQ(0,page_faults);
+	ASSERT_EQ(0,page_faults);
 	
 	destroy();
 	score+=15;
@@ -82,7 +82,7 @@ TEST (ALRU, GoodInputAllPageFaults) {
 			free(prr);
 		}
 	}
-	EXPECT_EQ(101,page_faults);
+	ASSERT_EQ(101,page_faults);
 
 	destroy();
 	score+=25;
@@ -102,7 +102,7 @@ TEST (ALRU, GoodInputMixPageFaults) {
 			free(prr);
 		}
 	}
-	EXPECT_EQ(1536,page_faults);
+	ASSERT_EQ(1536,page_faults);
 
 	destroy();
 	score+=20;
@@ -113,9 +113,9 @@ TEST (LFU, BadInput) {
 	initialize();
 
 	page_request_result_t* par = least_frequently_used(2048,100);
-	EXPECT_EQ(NULL,par);
+	ASSERT_EQ(NULL,par);
 	par = approx_least_recently_used(2049,100);
-	EXPECT_EQ(NULL,par);
+	ASSERT_EQ(NULL,par);
 
 	destroy();
 	score+=5;
@@ -140,7 +140,7 @@ TEST (LFU, GoodInputNoPageFaults) {
 			free(prr);
 		}
 	}
-	EXPECT_EQ(0,page_faults);
+	ASSERT_EQ(0,page_faults);
 
 	destroy();
 	score+=10;
@@ -167,7 +167,7 @@ TEST (LFU, GoodInputAllPageFaults) {
 			free(prr);
 		}
 	}
-	EXPECT_EQ(101,page_faults);
+	ASSERT_EQ(101,page_faults);
 
 	destroy();
 	score+=30;
@@ -181,13 +181,13 @@ TEST (LFU, GoodInputMixPageFaults) {
 	for (clock_time = 0; clock_time < 2048; ++clock_time) {
 		
 
-		page_request_result_t* prr = approx_least_recently_used(clock_time,clock_time);
+		page_request_result_t* prr = least_frequently_used(clock_time,clock_time);
 		if (prr != NULL) { 
 			page_faults++;
 			free(prr);
 		}
 	}
-	EXPECT_EQ(1536,page_faults);
+	ASSERT_EQ(1536,page_faults);
 
 	destroy();
 	score+=20;
@@ -198,10 +198,10 @@ TEST (write_to_back_store, BadInputs) {
 	char *baddata = NULL;
 	char data[1024] = {0};
 	
-	EXPECT_EQ(false,write_to_back_store (data, 2048)); 	
-	EXPECT_EQ(false,write_to_back_store (data, 2049)); 
+	ASSERT_EQ(false,write_to_back_store (data, 2048)); 	
+	ASSERT_EQ(false,write_to_back_store (data, 2049)); 
 
-	EXPECT_EQ(false,write_to_back_store (baddata, 10));
+	ASSERT_EQ(false,write_to_back_store (baddata, 10));
 
 	destroy();
 	score += 2;
@@ -216,10 +216,10 @@ TEST (write_to_back_store, GoodInput) {
 			data[j] = rand() % 255;
 		}
 		bool res = write_to_back_store (data, i); 
-		EXPECT_EQ(true,res);
+		ASSERT_EQ(true,res);
 		
 		ASSERT_EQ(back_store_read(ps.bs,i+8,&read),true);
-		EXPECT_EQ(0,memcmp(data,read,1024));
+		ASSERT_EQ(0,memcmp(data,read,1024));
 	}
 
 	destroy();
@@ -231,10 +231,10 @@ TEST (read_from_back_store, BadInputs) {
 	char *baddata = NULL;
 	char data[1024] = {0};
 
-	EXPECT_EQ(false,read_from_back_store (data, 2048)); 	
-	EXPECT_EQ(false,read_from_back_store (data, 2049)); 
+	ASSERT_EQ(false,read_from_back_store (data, 2048)); 	
+	ASSERT_EQ(false,read_from_back_store (data, 2049)); 
 
-	EXPECT_EQ(false,read_from_back_store (baddata, 10));
+	ASSERT_EQ(false,read_from_back_store (baddata, 10));
 
 	destroy();
 	score += 2;
@@ -253,8 +253,8 @@ TEST (read_from_back_store, GoodInput) {
 		ASSERT_EQ(back_store_write(ps.bs,i+8, &data),true);
 
 		bool res = read_from_back_store (read, i); 
-		EXPECT_EQ(true,res);
-		EXPECT_EQ(0,memcmp(data,read,1024));
+		ASSERT_EQ(true,res);
+		ASSERT_EQ(0,memcmp(data,read,1024));
 
 	}
 
