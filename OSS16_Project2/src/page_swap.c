@@ -90,6 +90,9 @@ unsigned int choose_lfu_victim_frame(void);
 // helper function to count set bits for LFU
 unsigned char bit_count(unsigned char value);
 
+// modularized access_tracking_byte updating
+void access_update(void);
+
 // function to populate and fill your frame table and page tables
 // do not remove
 bool initialize (void) {
@@ -256,19 +259,7 @@ page_request_result_t* page_swap(const SWAP_MODE mode, const uint16_t page_numbe
 
 		// after every TIME_INTERVAL, manage access pattern
 		if(clock_time != 0 && clock_time % TIME_INTERVAL == 0) {
-			// start with first frame
-			frame = &ps.frame_table.entries[0];
-			/* 
-			 * for every frame
-			 * 		1. right-shift access_tracking_byte 1 bit position
-			 * 		2. set MSB of tracking byte = access_bit (this is why use MSB of access_bit)
-			 * 		3. reset access_bit
-			 * */
-			for (int i = 0; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
-				frame->access_tracking_byte >>= 1;
-				frame->access_tracking_byte |= frame->access_bit;
-				frame->access_bit = 0;
-			}
+			access_update();
 		}
 	}
 
@@ -318,4 +309,21 @@ unsigned char bit_count(unsigned char value) {
 	for(count = 0; value != 0; value &= value - 1, count++);
 
 	return count;
+}
+
+void access_update(void) {
+	// start with first frame
+	frame_t* frame = &ps.frame_table.entries[0];
+	/* 
+	 * for every frame
+	 * 		1. right-shift access_tracking_byte 1 bit position
+	 * 		2. set MSB of tracking byte = access_bit (this is why use MSB of access_bit)
+	 * 		3. reset access_bit
+	 * */
+	for (int i = 0; i < MAX_PHYSICAL_MEMORY_SIZE; i++, frame++) {
+		frame->access_tracking_byte >>= 1;
+		frame->access_tracking_byte |= frame->access_bit;
+		frame->access_bit = 0;
+	}
+
 }
