@@ -38,7 +38,7 @@ int create_file(const char *const fname) {
 }
 int check_file(const char *const fname) {
     if (fname) {
-        int fd = open(fname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        int fd = open(fname, O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
         if (fd != -1) {
             struct stat file_info;
             if (fstat(fd, &file_info) != -1 && file_info.st_size == BYTE_TOTAL) {
