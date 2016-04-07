@@ -21,6 +21,11 @@ set(SHARED_FLAGS " -Wall -Wextra -Wshadow -g -D_POSIX_C_SOURCE=200809L ")
 set(CMAKE_CXX_FLAGS " -std=c++11 ${SHARED_FLAGS} ")
 set(CMAKE_C_FLAGS " -std=c99 ${SHARED_FLAGS} ")
 
+add_library(SoneSixFS SHARED src/S16FS.c)
+
+install(TARGETS SoneSixFS DESTINATION lib)
+install(FILES include/S16FS.h DESTINATION include)
+
 add_executable(fs_test test/tests.cpp)
 target_link_libraries(fs_test SoneSixFS ${back_store_lib} ${dyn_array_lib} ${bitmap_lib} ${GTEST_LIBRARIES} pthread)
 
