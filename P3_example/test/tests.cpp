@@ -11,12 +11,149 @@ unsigned int max;
 
 class GradeEnvironment : public testing::Environment {
   public:
+    // Override this to define how to set up the environment.
     virtual void SetUp() {
         score = 0;
         max   = 60;  // haha, should add this in case people start freaking out where the remiaining is
     }
+    // Override this to define how to tear down the environment.
     virtual void TearDown() { std::cout << "SCORE: " << score << " (out of " << max << ")" << std::endl; }
 };
+
+/*
+
+    int fs_get_dir(const S16FS_t *const fs, const char *const fname, dir_rec_t *const records)
+    1. Normal, root I guess?
+    2. Normal, subdir somewhere
+    3. Normal, empty dir
+    4. Error, empty fname
+    5. Error, NULL fname
+    6. Error, NULL fs
+    7. Error, NULL records
+    8. Error, not a directory
+
+    int fs_open_file(S16FS_t *const fs, const char * const fname)
+    1. Normal, file at root
+    2. Normal, file in subdir
+    3. Normal, multiple fd to the same file
+    4. Error, NULL fs
+    5. Error, NULL fname
+    6. Error, empty fname
+    7. Error, not a regular file
+    8. Error, file does not exist
+    9. Error, out of descriptors
+
+    ssize_t fs_write_file(S16FS_t *const fs, const char *const fname, const void *data, size_t nbyte, size_t offset)
+    1. Normal, in a subdir, 0 size to < 1 block
+    2. Normal, in a subdir, < 1 block to next (also, test offset below size of file)
+    3. Normal, in a subdir, 0 size to 1 block
+    4. Normal, in a subdir, 1 block to next
+    5. Normal, in a subdir, 1 block to partial
+    6. Normal, in a subdir, direct -> indirect
+    7. Normal, in a subdir, indirect -> dbl_indirect
+    8. Normal, in a subdir, full file (run out of blocks before max file size :/ )
+    9. Error, file full/blocks full (also test fs_create 13)
+    10. Error, file does not exist
+    11. Error, file is a directory
+    12. Error, nbyte + offset rollover
+    13. Error, fs NULL
+    14. Error, fname NULL
+    15. Error, fname empty
+    16. Error, data NULL
+    17. Error, nbyte 0 (not an error...? Bad parameters? Hmm.)
+    18. Error, offset past end of file
+
+    ssize_t fs_write_file(S16FS_t *const fs, const int fd, const void *data, size_t nbyte);
+    1. Normal, in a subdir, 0 size to < 1 block
+    2. Normal, in a subdir, < 1 block to next
+    3. Normal, in a subdir, 0 size to 1 block
+    4. Normal, in a subdir, 1 block to next
+    5. Normal, in a subdir, 1 block to partial
+    6. Normal, in a subdir, direct -> indirect
+    7. Normal, in a subdir, indirect -> dbl_indirect
+    8. Normal, in a subdir, full file (run out of blocks before max file size :/ )
+    9. Error, file full/blocks full (also test fs_create 13)
+    10. Error, nbyte + position rollover
+    11. Error, fs NULL
+    12. Error, data NULL
+    13. Error, nbyte 0 (not an error...? Bad parameters? Hmm.)
+    14. Error, bad fd
+
+    ssize_t fs_read_file(S16FS_t *const fs, const char *const fname, void *data, size_t nbyte, size_t offset);
+    1. Normal, subdir, begin to < 1 block
+    2. Normal, subdir, < 1 block to part of next
+    3. Normal, subdir, whole block
+    4. Normal, subdir, multiple blocks
+    5. Normal, subdir, direct->indirect transition
+    6. Normal, subdir, indirect->dbl_indirect transition
+    7. Error, file does not exist
+    8. Error, file not a regular file
+    9. Error, NULL fs
+    10. Error, NULL fname
+    11. Error, empty fname
+    12. Error, NULL data
+    13. Error, nbyte 0 (not an error?)
+    14. Error, offset well past EOF
+    15. Error, offset AT EOF
+
+    ssize_t fs_read_file(S16FS_t *const fs, const int fd, void *data, size_t nbyte);
+    1. Normal, subdir, begin to < 1 block
+    2. Normal, subdir, < 1 block to part of next
+    3. Normal, subdir, whole block
+    4. Normal, subdir, multiple blocks
+    5. Normal, subdir, direct->indirect transition
+    6. Normal, subdir, indirect->dbl_indirect transition
+    7. Error, NULL fs
+    8. Error, NULL data
+    9. Error, nbyte 0 (not an error?)
+    10. Error, at EOF (not an error?)
+
+    int fs_remove_file(S16FS_t *const fs, const char *const fname);
+    1. Normal, file at root
+    2. Normal, file in subdirectory (attept to write to already opened descriptor to this afterwards - DESCRIPTOR ONLY)
+    3. Normal, in subdir, empty directory
+    4. Normal, file in double indirects somewhere (use full fs file from write_file?)
+    5. Error, directory with contents
+    6. Error, file does not exist
+    7. Error, Root (also empty)
+    8. Error, NULL fs
+    9. Error, NULL fname
+    10. Error, Empty fname
+
+    int fs_move_file(S16FS_t *const fs, const char *const fname_src, const char *const fname_dst);
+    1. Normal, file, root to another place in root
+    2. Normal, file, one dir to another (attempt to use already opened descriptor after move - DESCRIPTOR ONLY)
+    3. Normal, directory
+    4. Normal, Rename of file where the directory is full
+    5. Error, dst exists
+    6. Error, dst parent does not exist
+    7. Error, dst parent full
+    8. Error, src does not exist
+    9. ?????, src = dst
+    10. Error, FS null
+    11. Error, src null
+    12. Error, src empty
+    13. Error, src is root
+    14. Error, dst NULL
+    15. Error, dst empty
+    16. Error, dst root?
+    Evil one I won't test: Move a directory into itself
+
+    int fs_seek_file(S16FS_t *const fs, const int fd, const off_t offset, const seek_t whence)
+    1. Normal, wherever, really - make sure it doesn't change a second fd to the file
+    2. ?????, seek past beginning - resulting location unspecified by our api, can't really test?
+    3. ?????, seek past end - resulting location unspecified by our api, can't really test?
+    4. Error, FS null
+    5. Error, fd invalid
+    6. Error, whence not a valid value
+
+    int fs_close_file(S16FS_t *const fs, const int fd)
+    1. Normal, whatever, attempt to use after closing, assert failure
+    2. Normal, multiple opens, close does not affect the others
+    3. Error, FS null
+    4. Error, invalid fd
+
+*/
 
 /*
 
