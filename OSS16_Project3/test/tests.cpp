@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <iostream>
 
 #include <gtest/gtest.h>
@@ -13,10 +14,108 @@ class GradeEnvironment : public testing::Environment {
   public:
     virtual void SetUp() {
         score = 0;
-        max   = 60;  // haha, should add this in case people start freaking out where the remiaining is
+        max   = 0;
     }
     virtual void TearDown() { std::cout << "SCORE: " << score << " (out of " << max << ")" << std::endl; }
 };
+
+/*
+
+    int fs_get_dir(const S16FS_t *const fs, const char *const fname, dir_rec_t *const records)
+    1. Normal, root I guess?
+    2. Normal, subdir somewhere
+    3. Normal, empty dir
+    4. Error, empty fname
+    5. Error, NULL fname
+    6. Error, NULL fs
+    7. Error, NULL records
+    8. Error, not a directory
+
+    ssize_t fs_write_file(S16FS_t *const fs, const int fd, const void *data, size_t nbyte);
+    1. Normal, in a subdir, 0 size to < 1 block
+    2. Normal, in a subdir, < 1 block to next
+    3. Normal, in a subdir, 0 size to 1 block
+    4. Normal, in a subdir, 1 block to next
+    5. Normal, in a subdir, 1 block to partial
+    6. Normal, in a subdir, direct -> indirect
+    7. Normal, in a subdir, indirect -> dbl_indirect
+    8. Normal, in a subdir, full file (run out of blocks before max file size :/ )
+    9. Error, file full/blocks full (also test fs_create 13)
+    10. Error, nbyte + position rollover
+    11. Error, fs NULL
+    12. Error, data NULL
+    13. Error, nbyte 0 (not an error...? Bad parameters? Hmm.)
+    14. Error, bad fd
+
+    ssize_t fs_read_file(S16FS_t *const fs, const char *const fname, void *data, size_t nbyte, size_t offset);
+    1. Normal, subdir, begin to < 1 block
+    2. Normal, subdir, < 1 block to part of next
+    3. Normal, subdir, whole block
+    4. Normal, subdir, multiple blocks
+    5. Normal, subdir, direct->indirect transition
+    6. Normal, subdir, indirect->dbl_indirect transition
+    7. Error, file does not exist
+    8. Error, file not a regular file
+    9. Error, NULL fs
+    10. Error, NULL fname
+    11. Error, empty fname
+    12. Error, NULL data
+    13. Error, nbyte 0 (not an error?)
+    14. Error, offset well past EOF
+    15. Error, offset AT EOF
+
+    ssize_t fs_read_file(S16FS_t *const fs, const int fd, void *data, size_t nbyte);
+    1. Normal, subdir, begin to < 1 block
+    2. Normal, subdir, < 1 block to part of next
+    3. Normal, subdir, whole block
+    4. Normal, subdir, multiple blocks
+    5. Normal, subdir, direct->indirect transition
+    6. Normal, subdir, indirect->dbl_indirect transition
+    7. Error, NULL fs
+    8. Error, NULL data
+    9. Error, nbyte 0 (not an error?)
+    10. Error, at EOF (not an error?)
+
+    int fs_remove_file(S16FS_t *const fs, const char *const fname);
+    1. Normal, file at root
+    2. Normal, file in subdirectory (attept to write to already opened descriptor to this afterwards - DESCRIPTOR ONLY)
+    3. Normal, in subdir, empty directory
+    4. Normal, file in double indirects somewhere (use full fs file from write_file?)
+    5. Error, directory with contents
+    6. Error, file does not exist
+    7. Error, Root (also empty)
+    8. Error, NULL fs
+    9. Error, NULL fname
+    10. Error, Empty fname
+
+    int fs_move_file(S16FS_t *const fs, const char *const fname_src, const char *const fname_dst);
+    1. Normal, file, root to another place in root
+    2. Normal, file, one dir to another (attempt to use already opened descriptor after move - DESCRIPTOR ONLY)
+    3. Normal, directory
+    4. Normal, Rename of file where the directory is full
+    5. Error, dst exists
+    6. Error, dst parent does not exist
+    7. Error, dst parent full
+    8. Error, src does not exist
+    9. ?????, src = dst
+    10. Error, FS null
+    11. Error, src null
+    12. Error, src empty
+    13. Error, src is root
+    14. Error, dst NULL
+    15. Error, dst empty
+    16. Error, dst root?
+    Evil one I won't test: Move a directory into itself
+
+    int fs_seek_file(S16FS_t *const fs, const int fd, const off_t offset, const seek_t whence)
+    1. Normal, wherever, really - make sure it doesn't change a second fd to the file
+    2. ?????, seek past beginning - resulting location unspecified by our api, can't really test?
+    3. ?????, seek past end - resulting location unspecified by our api, can't really test?
+    4. Error, FS null
+    5. Error, fd invalid
+    6. Error, whence not a valid value
+
+*/
 
 /*
 
@@ -71,8 +170,6 @@ TEST(a_tests, format_mount_unmount) {
     // There was a bug where it would try to open files with O_CREATE
     // Which, obviously, would cause issues
     ASSERT_EQ(fs_mount(""), nullptr);
-
-    score += 15;
 }
 
 /*
@@ -180,8 +277,6 @@ TEST(b_tests, file_creation_one) {
     // Closing this file now for inspection to make sure these tests didn't mess it up
 
     fs_unmount(fs);
-
-    score += 30;
 }
 
 TEST(b_tests, file_creation_two) {
@@ -257,10 +352,160 @@ TEST(b_tests, file_creation_two) {
     // save file for inspection
     fs_unmount(fs);
 
-    score += 15;
-
     // ... Can't really test 21 yet.
 }
+
+
+/*
+    int fs_open(S16FS_t *fs, const char *path)
+    1. Normal, file at root
+    2. Normal, file in subdir
+    3. Normal, multiple fd to the same file
+    4. Error, NULL fs
+    5. Error, NULL fname
+    6. Error, empty fname ???
+    7. Error, not a regular file
+    8. Error, file does not exist
+    9. Error, out of descriptors
+
+    int fs_close(S16FS_t *fs, int fd);
+    1. Normal, whatever
+    2. Normal, attempt to use after closing, assert failure **
+    3. Normal, multiple opens, close does not affect the others **
+    4. Error, FS null
+    5. Error, invalid fd, positive
+    6. Error, invalid fd, positive, out of bounds
+    7. Error, invaid fs, negative
+*/
+TEST(c_tests, open_close_file) {
+    const char *(filenames[14])
+        = {"/file", "/folder", "/folder/with_file", "/folder/with_folder", "/DOESNOTEXIST", "/file/BAD_REQUEST",
+           "/DOESNOTEXIST/with_file", "/folder/with_file/bad_req", "folder/missing_slash", "/folder/new_folder/",
+           "/folder/withwaytoolongfilenamethattakesupmorespacethanitshould and yet was not enough so I had to add "
+           "more/bad_req",
+           "/folder/withfilethatiswayyyyytoolongwhydoyoumakefilesthataretoobigEXACT!", "/", "/mystery_file"};
+
+    const char *test_fname = "c_tests.s16fs";
+
+    ASSERT_EQ(system("cp b_tests_normal.s16fs c_tests.s16fs"), 0);
+
+    S16FS_t *fs = fs_mount(test_fname);
+
+    ASSERT_NE(fs, nullptr);
+
+    int fd_array[256] = {-1};
+
+    // OPEN_FILE 1
+    fd_array[0] = fs_open(fs, filenames[0]);
+    ASSERT_GE(fd_array[0], 0);
+
+    // CLOSE_FILE 4
+    ASSERT_LT(fs_close(NULL, fd_array[0]), 0);
+
+    // CLOSE_FILE 1
+    ASSERT_EQ(fs_close(fs, fd_array[0]), 0);
+
+    // CLOSE_FILE 2 and 3 elsewhere
+
+    // CLOSE_FILE 5
+    ASSERT_LT(fs_close(fs, 70), 0);
+
+    // CLOSE_FILE 6
+    ASSERT_LT(fs_close(fs, 7583), 0);
+
+    // CLOSE_FILE 7
+    ASSERT_LT(fs_close(fs, -18), 0);
+
+    // OPEN_FILE 2
+    fd_array[1] = fs_open(fs, filenames[2]);
+    ASSERT_GE(fd_array[1], 0);
+
+    ASSERT_EQ(fs_close(fs, fd_array[0]), 0);
+
+    // OPEN_FILE 3
+    fd_array[2] = fs_open(fs, filenames[0]);
+    ASSERT_GE(fd_array[2], 0);
+    fd_array[3] = fs_open(fs, filenames[0]);
+    ASSERT_GE(fd_array[3], 0);
+    fd_array[4] = fs_open(fs, filenames[0]);
+    ASSERT_GE(fd_array[4], 0);
+
+    ASSERT_EQ(fs_close(fs, fd_array[2]), 0);
+    ASSERT_EQ(fs_close(fs, fd_array[3]), 0);
+    ASSERT_EQ(fs_close(fs, fd_array[4]), 0);
+
+    // OPEN_FILE 4
+    fd_array[5] = fs_open(NULL, filenames[0]);
+    ASSERT_LT(fd_array[5], 0);
+
+    // OPEN_FILE 5
+    fd_array[5] = fs_open(fs, NULL);
+    ASSERT_LT(fd_array[5], 0);
+
+    // OPEN_FILE 6
+    // Uhh, bad filename? Not a slash?
+    // It's wrong for a bunch of reasons, really.
+    fd_array[5] = fs_open(fs, "");
+    ASSERT_LT(fd_array[5], 0);
+
+    // OPEN_FILE 7
+    fd_array[5] = fs_open(fs, "/");
+    ASSERT_LT(fd_array[5], 0);
+
+    fd_array[5] = fs_open(fs, filenames[1]);
+    ASSERT_LT(fd_array[5], 0);
+
+    // OPEN_FILE 8
+    fd_array[5] = fs_open(fs, filenames[6]);
+    ASSERT_LT(fd_array[5], 0);
+
+    // OPEN_FILE 9
+    // In case I'm leaking descriptors, wipe them all
+    fs_unmount(fs);
+    fs = fs_mount(test_fname);
+    ASSERT_NE(fs, nullptr);
+
+    for (int i = 0; i < 256; ++i) {
+        fd_array[i] = fs_open(fs, filenames[0]);
+    }
+
+    int err = fs_open(fs, filenames[0]);
+
+    ASSERT_LT(err, 0);
+
+    fs_unmount(fs);
+}
+
+/*
+    ssize_t fs_write_file(S16FS_t *const fs, const int fd, const void *data, size_t nbyte);
+    1. Normal, in a subdir, 0 size to < 1 block
+    2. Normal, in a subdir, < 1 block to next
+    3. Normal, in a subdir, 0 size to 1 block
+    4. Normal, in a subdir, 1 block to next
+    5. Normal, in a subdir, 1 block to partial
+    6. Normal, in a subdir, direct -> indirect
+    7. Normal, in a subdir, indirect -> dbl_indirect
+    8. Normal, in a subdir, full file (run out of blocks before max file size :/ )
+    9. Error, file full/blocks full (also test fs_create 13)
+    10. Error, nbyte + position rollover
+    11. Error, fs NULL
+    12. Error, data NULL
+    13. Error, nbyte 0 (not an error...? Bad parameters? Hmm.)
+    14. Error, bad fd
+*/
+/*
+TEST(d_tests, write_file) {
+
+}
+
+TEST(e_tests, remove_file) {
+
+}
+
+TEST(f_tests, remove_write_close_file) {
+
+}
+*/
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
