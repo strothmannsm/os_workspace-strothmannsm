@@ -1,5 +1,9 @@
 #include <cstdlib>
 #include <iostream>
+#include <new>
+#include <vector>
+using std::vector;
+using std::string;
 
 #include <gtest/gtest.h>
 
@@ -200,12 +204,12 @@ int fs_create(S16FS_t *const fs, const char *const fname, const ftype_t ftype);
 */
 
 TEST(b_tests, file_creation_one) {
-    const char *(filenames[14])
-        = {"/file", "/folder", "/folder/with_file", "/folder/with_folder", "/DOESNOTEXIST", "/file/BAD_REQUEST",
-           "/DOESNOTEXIST/with_file", "/folder/with_file/bad_req", "folder/missing_slash", "/folder/new_folder/",
-           "/folder/withwaytoolongfilenamethattakesupmorespacethanitshould and yet was not enough so I had to add "
-           "more/bad_req",
-           "/folder/withfilethatiswayyyyytoolongwhydoyoumakefilesthataretoobigEXACT!", "/", "/mystery_file"};
+    vector<const char *> filenames{
+        "/file", "/folder", "/folder/with_file", "/folder/with_folder", "/DOESNOTEXIST", "/file/BAD_REQUEST",
+        "/DOESNOTEXIST/with_file", "/folder/with_file/bad_req", "folder/missing_slash", "/folder/new_folder/",
+        "/folder/withwaytoolongfilenamethattakesupmorespacethanitshould and yet was not enough so I had to add "
+        "more/bad_req",
+        "/folder/withfilethatiswayyyyytoolongwhydoyoumakefilesthataretoobigEXACT!", "/", "/mystery_file"};
 
     const char *test_fname = "b_tests_normal.s16fs";
 
@@ -378,12 +382,12 @@ TEST(b_tests, file_creation_two) {
     7. Error, invaid fs, negative
 */
 TEST(c_tests, open_close_file) {
-    const char *(filenames[14])
-        = {"/file", "/folder", "/folder/with_file", "/folder/with_folder", "/DOESNOTEXIST", "/file/BAD_REQUEST",
-           "/DOESNOTEXIST/with_file", "/folder/with_file/bad_req", "folder/missing_slash", "/folder/new_folder/",
-           "/folder/withwaytoolongfilenamethattakesupmorespacethanitshould and yet was not enough so I had to add "
-           "more/bad_req",
-           "/folder/withfilethatiswayyyyytoolongwhydoyoumakefilesthataretoobigEXACT!", "/", "/mystery_file"};
+    vector<const char *> filenames{
+        "/file", "/folder", "/folder/with_file", "/folder/with_folder", "/DOESNOTEXIST", "/file/BAD_REQUEST",
+        "/DOESNOTEXIST/with_file", "/folder/with_file/bad_req", "folder/missing_slash", "/folder/new_folder/",
+        "/folder/withwaytoolongfilenamethattakesupmorespacethanitshould and yet was not enough so I had to add "
+        "more/bad_req",
+        "/folder/withfilethatiswayyyyytoolongwhydoyoumakefilesthataretoobigEXACT!", "/", "/mystery_file"};
 
     const char *test_fname = "c_tests.s16fs";
 
@@ -477,35 +481,130 @@ TEST(c_tests, open_close_file) {
 }
 
 /*
-    ssize_t fs_write_file(S16FS_t *const fs, const int fd, const void *data, size_t nbyte);
-    1. Normal, in a subdir, 0 size to < 1 block
-    2. Normal, in a subdir, < 1 block to next
-    3. Normal, in a subdir, 0 size to 1 block
-    4. Normal, in a subdir, 1 block to next
-    5. Normal, in a subdir, 1 block to partial
-    6. Normal, in a subdir, direct -> indirect
-    7. Normal, in a subdir, indirect -> dbl_indirect
-    8. Normal, in a subdir, full file (run out of blocks before max file size :/ )
+    ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte);
+    1. Normal, 0 size to < 1 block
+    2. Normal, < 1 block to next
+    3. Normal, 0 size to 1 block
+    4. Normal, 1 block to next
+    5. Normal, 1 block to partial
+    6. Normal, direct -> indirect
+    7. Normal, indirect -> dbl_indirect
+    8. Normal, full file (run out of blocks before max file size :/ )
     9. Error, file full/blocks full (also test fs_create 13)
-    10. Error, nbyte + position rollover
-    11. Error, fs NULL
-    12. Error, data NULL
-    13. Error, nbyte 0 (not an error...? Bad parameters? Hmm.)
-    14. Error, bad fd
+    10. Error, fs NULL
+    11. Error, data NULL
+    12. Error, nbyte 0 (not an error...? Bad parameters? Hmm.)
+    13. Error, bad fd
 */
-/*
-TEST(d_tests, write_file) {
 
+TEST(d_tests, write_file_simple) {
+    vector<const char *> fnames{"/file_a", "/file_b", "/file_c", "/file_d"};
+
+    const char *test_fname = "d_tests_normal.s16fs";
+
+    S16FS_t *fs = fs_format(test_fname);
+
+    ASSERT_NE(fs, nullptr);
+
+    uint8_t three_a[1024];
+    memset(three_a, 0x33, 333);
+    memset(three_a + 333, 0xAA, 691);
+    // 333 0x33, rest is 0xAA
+    // I really wish there was a "const but wait like 2 sec I need to wite something complex"
+    uint8_t two_nine[1024];
+    memset(two_nine, 0x22, 222);
+    memset(two_nine + 222, 0x99, 802);
+    // Figure out the pattern yet?
+    uint8_t large_eight_five_b_seven[1024 * 3];
+    memset(large_eight_five_b_seven, 0x88, 888);
+    memset(large_eight_five_b_seven + 888, 0x55, 555);
+    memset(large_eight_five_b_seven + 555 + 888, 0xBB, 1111);
+    memset(large_eight_five_b_seven + 555 + 1111 + 888, 0x77, 518);
+
+    // ... I just realized we can't read the data to verify it yet.
+    // Whose idea was this, anyway.
+    // I guess we'll have to manually inspect files and throw some points to that.
+    // Wheeeee....
+    // Or I can get the autograder to figure it out. Or make Matt do it. Probably that one.
+    // Everything's automated if you make someone else do it, this is why I'm the best TA
+
+    ASSERT_EQ(fs_create(fs, fnames[0], FS_REGULAR), 0);
+    int fd_array[5] = {-1};  // wonderful arbitrary number
+
+    fd_array[0] = fs_open(fs, fnames[0]);
+    ASSERT_GE(fd_array[0], 0);
+
+    ASSERT_EQ(fs_create(fs, fnames[1], FS_REGULAR), 0);
+
+    fd_array[1] = fs_open(fs, fnames[1]);
+    ASSERT_GE(fd_array[1], 0);
+
+    ASSERT_EQ(fs_create(fs, fnames[2], FS_REGULAR), 0);
+
+    fd_array[2] = fs_open(fs, fnames[2]);
+    ASSERT_GE(fd_array[2], 0);
+
+    // Alrighty, time to get some work done.
+    // This FS object has one block eaten up at the moment for root, so we have...
+    // 65536 - 41 = 65495 blocks. And we need to eventually use up all of them. Good.
+
+    // FS_WRITE 1
+    ASSERT_EQ(fs_write(fs, fd_array[0], three_a, 334), 334);
+
+    // FS_WRITE 2
+    ASSERT_EQ(fs_write(fs, fd_array[0], large_eight_five_b_seven, 1200), 1200);
+    // file should be 333 0x33, 1 0xAA, 888 0x88 , 312 0x55 and dipping into second block
+
+    // FS_WRITE 3
+    ASSERT_EQ(fs_write(fs, fd_array[1], two_nine, 1024), 1024);
+
+    // FS_WRITE 4
+    ASSERT_EQ(fs_write(fs, fd_array[1], two_nine, 1024), 1024);
+    // File has two copies of two_nine
+
+    // FS_WRITE 5
+    ASSERT_EQ(fs_write(fs, fd_array[2], large_eight_five_b_seven + 555 + 888, 1024), 1024);
+
+    ASSERT_EQ(fs_write(fs, fd_array[2], three_a, 334), 334);
+    // file is a block of 0x11, 333 0x33 and one 0xAA
+
+    // I'll do the breakage tests now, move the big writes somewhere else
+    // 2. Normal, attempt to use after closing, assert failure **
+    // 3. Normal, multiple opens, close does not affect the others **
+
+    // FS_WRITE 11
+    ASSERT_LT(fs_write(NULL, fd_array[2], three_a, 999), 0);
+
+    // FS_WRITE 12
+    ASSERT_LT(fs_write(fs, fd_array[2], NULL, 999), 0);
+    // Can't validate that it didn't mess up the R/W position :/
+
+    // FS_WRITE 13
+    ASSERT_EQ(fs_write(fs, fd_array[2], three_a, 0), 0);
+
+    // FS_WRITE 14
+    ASSERT_LT(fs_write(fs, 90, three_a, 12), 0);
+    ASSERT_LT(fs_write(fs, -90, three_a, 12), 0);
+
+    // FS_CLOSE 2
+    ASSERT_EQ(fs_close(fs, fd_array[0]), 0);
+    ASSERT_LT(fs_write(fs, fd_array[0], three_a, 500), 0);
+
+    // FS_CLOSE 3
+    fd_array[0] = fs_open(fs, fnames[1]);
+    ASSERT_GE(fd_array[0], 0);
+    // fd 0 and 1 point to same file
+
+    ASSERT_EQ(fs_close(fs, fd_array[0]), 0);
+
+    ASSERT_EQ(fs_write(fs, fd_array[1], three_a, 1024), 1024);
+    // File better have two two_nines and a three_a
+
+    // And I'm going to unmount without closing.
+
+    fs_unmount(fs);
 }
 
-TEST(e_tests, remove_file) {
-
-}
-
-TEST(f_tests, remove_write_close_file) {
-
-}
-*/
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
