@@ -219,17 +219,22 @@ int fs_create(S16FS_t *fs, const char *path, file_t type) {
 ///
 int fs_open(S16FS_t *fs, const char *path) {
     if(fs && path) {
+        //first we have to find the file
         result_t res;
         locate_file(fs, path, &res);
         if(res.success && res.found && res.type == FS_REGULAR) {
+            //congratulations, file found
+            //  also you wanted to open a FS_REGULAR file
+            //find an open fd to use
             size_t fd = bitmap_ffz(fs->fd_table.fd_status);
             if(fd != SIZE_MAX) {
+                //got one, set the status bit and table values and return it
                 bitmap_set(fs->fd_table.fd_status, fd);
                 fs->fd_table.fd_pos[fd] = 0;
                 fs->fd_table.fd_inode[fd] = res.inode;
                 return fd;
-            }
-        } //else bad path
+            } //else fd_table is full
+        } //else bad path or you tried to open a directory... /glare
     } //else bad parameter
     return -1;
 }
@@ -242,7 +247,9 @@ int fs_open(S16FS_t *fs, const char *path) {
 ///
 int fs_close(S16FS_t *fs, int fd) {
     if(fs && FD_VALID(fd) && bitmap_test(fs->fd_table.fd_status, fd)) {
+        //to close a file it's enough to clear the status bit
         bitmap_reset(fs->fd_table.fd_status, fd);
+        //but for funsies i'm going to clear the table right quick
         fs->fd_table.fd_pos[fd] = 0;
         fs->fd_table.fd_inode[fd] = 0;
         return 0;
@@ -261,30 +268,28 @@ int fs_close(S16FS_t *fs, int fd) {
 /// \param nbyte The number of bytes to write
 /// \return number of bytes written (< nbyte IFF out of space), < 0 on error
 ///
-int num;
 ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
     if(fs && FD_VALID(fd) && bitmap_test(fs->fd_table.fd_status, fd) && src) {
-        //let's do this... hopefully... maybe????
+        //let's do this... hopefully... maybe???? -- so this was hard... but i did it!!
         //extract the inode number from fd_table and get the inode
         inode_ptr_t f_inode_ptr = fs->fd_table.fd_inode[fd];
         inode_t f_inode;
         if(read_inode(fs, &f_inode, f_inode_ptr)) {
             size_t position = fs->fd_table.fd_pos[fd]; //postion in file to start writing
             size_t log_block_offset = POSITION_TO_INNER_OFFSET(position); //position offset within logical block
+            
             //cut up nbyte into chunks for logical block, full blocks, and last block
             size_t log_block_writable = BLOCK_SIZE - log_block_offset; //bytes left in logical block
             size_t full_block_writable; //number of full blocks to write
             size_t last_block_writable; //number of leftover bytes to write after logical block and full blocks
 
-            //this is important!
             //if nbyte is bigger than what's available in the first logical block
             if(nbyte > log_block_writable) {
                 //we might need more full blocks and/or a partial block at the end
                 full_block_writable = (nbyte - log_block_writable) / BLOCK_SIZE;
                 last_block_writable = (nbyte - log_block_writable) % BLOCK_SIZE;
-//printf("full blocks: %d  last_block: %d  ", full_block_writable + (log_block_writable/BLOCK_SIZE), last_block_writable);
             } else {
-                //enough room in logical block to write
+                // else enough room in logical block to write
                 log_block_writable = nbyte;
                 full_block_writable = 0;
                 last_block_writable = 0;
@@ -305,43 +310,62 @@ ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
             //fill array of block ptrs with existing or newly allocated ptrs
             get_data_block_ptrs(fs, &f_inode, position, n_write_blocks, writable_ptrs);
 
-            //copy src data since we can't do math on void pointers
-            // uint8_t src_cpy[nbyte];
-            // memcpy(src_cpy, src, nbyte);
-
             //get data blocks to write to
-            uint8_t buffer[n_write_blocks * BLOCK_SIZE];
-            for(size_t i = 0; i < n_write_blocks && writable_ptrs[i]; i++) {
-                if(!full_read(fs, buffer+i*BLOCK_SIZE, writable_ptrs[i])) {
-                    return -1;
-                }
-            }
+            // uint8_t buffer[n_write_blocks * BLOCK_SIZE];
+            // for(size_t i = 0; i < n_write_blocks && writable_ptrs[i]; i++) {
+            //     if(!full_read(fs, buffer+i*BLOCK_SIZE, writable_ptrs[i])) {
+            //         return -1;
+            //     }
+            // }
 
             ssize_t bytes_written = 0;
 
-            //loop through all the blocks and copy data
+            //loop through all the blocks in the buffer and copy data
             for(size_t i = 0; i < n_write_blocks && writable_ptrs[i]; i++) {
                 if(i == 0) {
-                    //special handling for first block to write
-                    memcpy(buffer+log_block_offset, src, log_block_writable);
+                    //special handling for first block to write in case it's partially full
+                    uint8_t data[BLOCK_SIZE];
+                    if(!full_read(fs, data, writable_ptrs[i])) {
+                        return -1;
+                    }
+                    memcpy(data+log_block_offset, src, log_block_writable);
+                    if(!full_write(fs, data, writable_ptrs[i])) {
+                        return -1;
+                    }
+                    // if(!partial_write(fs, src, writable_ptrs[i], log_block_offset, log_block_writable)) {
+                    //     return -1;
+                    // }
                     bytes_written += log_block_writable;
                 } else if(i == n_write_blocks - 1 && last_block_writable) {
-                    //special handling for last block to write
-                    memcpy(buffer+(i*BLOCK_SIZE), INCREMENT_VOID(src, bytes_written), last_block_writable);
+                    //special handling for last block to write in case we have a non-full block at the end
+                    uint8_t data[BLOCK_SIZE];
+                    if(!full_read(fs, data, writable_ptrs[i])) {
+                        break;
+                    }
+                    memcpy(data, INCREMENT_VOID(src, bytes_written), last_block_writable);
+                    if(!full_write(fs, data, writable_ptrs[i])) {
+                        break;
+                    }
+                    // if(!partial_write(fs, INCREMENT_VOID(src, bytes_written), writable_ptrs[i], 0, last_block_writable)) {
+                    //     break;
+                    // }
                     bytes_written += last_block_writable;
                 } else {
-                    //full blocks in the middle
-                    memcpy(buffer+(i*BLOCK_SIZE), INCREMENT_VOID(src, bytes_written), BLOCK_SIZE);
+                    //full blocks in between the first block and last block
+                    if(!full_write(fs, INCREMENT_VOID(src, bytes_written), writable_ptrs[i])){
+                        break;
+                    }
+                    //memcpy(buffer+(i*BLOCK_SIZE), INCREMENT_VOID(src, bytes_written), BLOCK_SIZE);
                     bytes_written += BLOCK_SIZE;
                 }
             }
 
             //write data blocks back out
-            for(size_t i = 0; i < n_write_blocks && writable_ptrs[i]; i++) {
-                if(!full_write(fs, buffer+i*BLOCK_SIZE, writable_ptrs[i])) {
-                    return -1;
-                }
-            }
+            // for(size_t i = 0; i < n_write_blocks && writable_ptrs[i]; i++) {
+            //     if(!full_write(fs, buffer+i*BLOCK_SIZE, writable_ptrs[i])) {
+            //         return -1;
+            //     }
+            // }
 
             //update offset in fd_table and file size
             fs->fd_table.fd_pos[fd] += bytes_written;
@@ -351,14 +375,11 @@ ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
 
             //just need to write out the inode to make sure data_ptrs are updated
             if(write_inode(fs, &f_inode, f_inode_ptr)) {
-                
-                //if(num >= 500) {printf("my num blocks: %d\n", num);}
+                //holy crap we made it through!! return
                 return bytes_written;
-
             } //else failed to write inode
         } //else failed to read inode
     } //else bad parameter
-
     return -1;
 }
 
@@ -371,82 +392,121 @@ ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
 ///
 int fs_remove(S16FS_t *fs, const char *path) {
     if(fs && path) {
+        //first have to find the file to remove
         result_t file_status;
         locate_file(fs, path, &file_status);
         if(file_status.success && file_status.found && file_status.inode) {
             //we found the file, now get the inode and the parent inode
             inode_t f_inode, parent_inode;
-            if(!read_inode(fs, &f_inode, file_status.inode)) {
-                return -1;
-            }
-            if(!read_inode(fs, &parent_inode, file_status.parent)) {
-                return -1;
-            }
-            //if(!read_inode(fs, &f_inode, file_status.inode) || !read_inode(fs, &parent_inode, file_status.parent)) {
-            dir_block_t dir;
-            size_t f_blocks;
-            //do different things based on type
-            switch(file_status.type) {
-                case FS_REGULAR:
-                    //calculate number of data blocks
-                    f_blocks = f_inode.mdata.size / BLOCK_SIZE;
-                    if(f_inode.mdata.size % BLOCK_SIZE) {
-                        ++f_blocks;
+            if(read_inode(fs, &f_inode, file_status.inode) && read_inode(fs, &parent_inode, file_status.parent)) {
+                //
+                dir_block_t dir;
+                size_t f_blocks;
+                //do different things based on type
+                switch(file_status.type) {
+                    case FS_REGULAR:
+                        //calculate number of data blocks for getting list of blocks later
+                        f_blocks = f_inode.mdata.size / BLOCK_SIZE;
+                        if(f_inode.mdata.size % BLOCK_SIZE) {
+                            ++f_blocks;
+                        }
+                        //remove all possible occurrences from fd_table
+                        for(int i = 0; i < DESCRIPTOR_MAX; i++) {
+                            //if the inode number appears in the fd_table, close it 
+                            if(bitmap_test(fs->fd_table.fd_status, i) && fs->fd_table.fd_inode[i] == file_status.inode) {
+                                fs_close(fs, i);
+                            }
+                        }
+                        break;
+                    case FS_DIRECTORY:
+                        //directories only have one data block
+                        if(file_status.type == FS_DIRECTORY) {
+                            f_blocks = 1;
+                        }
+                        //make sure directory is empty
+                        if(!full_read(fs, &dir, file_status.block)) {
+                            return -1;
+                        }
+                        if(dir.mdata.size) {
+                            return -1;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                
+                //let's free some blocks.. since that's like the point of removing files
+                //don't bother file has no blocks
+                if(f_blocks) {
+                    //get list of data blocks
+                    block_ptr_t data_ptrs[f_blocks];
+                    get_data_block_ptrs(fs, &f_inode, 0, f_blocks, data_ptrs);
+                    //and release them all
+                    for(size_t i = 0; i < f_blocks && data_ptrs[i]; i++) {
+                        back_store_release(fs->bs, data_ptrs[i]);
                     }
-                    //remove all possible occurrences from fd_table
-                    for(int i = 0; i < DESCRIPTOR_MAX; i++) {
-                        //if the inode number appears in the fd_table, close it 
-                        if(bitmap_test(fs->fd_table.fd_status, i) && fs->fd_table.fd_inode[i] == file_status.inode) {
-                            fs_close(fs, i);
+
+                    //now the interesting part.. gotta free those indirection blocks
+                    //check single indirect
+                    if(f_inode.data_ptrs[6]) {
+                        //single indirect block is easy because data ptrs are released already
+                        back_store_release(fs->bs, f_inode.data_ptrs[6]);
+                    }
+                    //check double indirect
+                    if(f_inode.data_ptrs[7]) {
+                        //damn.. now we have to loop through double indirect to release single indirect blocks
+                        block_ptr_t d_block[INDIRECT_TOTAL];
+                        if(!full_read(fs, &d_block, f_inode.data_ptrs[7])) {
+                            //god forbid this happens, because the data blocks are gone
+                            //so we would just have random blocks that are marked as used
+                            //but are completely useless
+                            //that's what chkdsk is for
+                            return -1;
+                        }
+                        bool stop = false;
+                        for(size_t i = 0; i < INDIRECT_TOTAL && !stop; i++) {
+                            if(d_block[i]) {
+                                //but at least the data blocks are all realeased
+                                back_store_release(fs->bs, d_block[i]);
+                            } else {
+                                //just to kill the loop rather than loop all the way through when we don't need to
+                                stop = true;
+                            }
                         }
                     }
-                    break;
-                case FS_DIRECTORY:
-                    //directories only have one data block
-                    if(file_status.type == FS_DIRECTORY) {
-                        f_blocks = 1;
-                    }
-                    //make sure directory is empty
-                    if(!full_read(fs, &dir, file_status.block)) {
-                        return -1;
-                    }
-                    if(dir.mdata.size) {
-                        return -1;
-                    }
-                    break;
-                default:
-                    break;
-            }
-            
-            //don't bother trying to get block pointers if file has no data blocks
-            if(f_blocks) {
-                block_ptr_t data_ptrs[f_blocks];
+                }
                 
-                get_data_block_ptrs(fs, &f_inode, 0, f_blocks, data_ptrs);
-            
-                for(size_t i = 0; i < f_blocks && data_ptrs[i]; i++) {
-                    back_store_release(fs->bs, data_ptrs[i]);
-                }
-            }
-            
-            //clear the inode
-            memset(&f_inode, 0x00, sizeof(inode_t));
+                //clear the inode
+                memset(&f_inode, 0x00, sizeof(inode_t));
+                //that was easy...
 
-            //remove fname and inode from parent directory block
-            dir_block_t parent_dir;
-            if(write_inode(fs, &f_inode, file_status.inode) && full_read(fs, &parent_dir, parent_inode.data_ptrs[0])) {
-                for(size_t i = 0; i < DIR_REC_MAX; i++) {
-                    if(file_status.inode == parent_dir.entries[i].inode) {
-                        parent_dir.entries[i].fname[0] = '\0';
-                        parent_dir.entries[i].inode = 0;
-                        --parent_dir.mdata.size;
+                //remove dir_entry from parent directory block
+                dir_block_t parent_dir;
+                if(write_inode(fs, &f_inode, file_status.inode) && full_read(fs, &parent_dir, parent_inode.data_ptrs[0])) {
+                    //if write_inode works, but reading the parenty dir_block doesn't we have an intersting situation
+                    //because the file has been completely eradicated from the system
+                    //HOWEVER the parent directory wouldn't know... that's sad
+                    //but that didn't happen so lets finish this
+                    //find the entry in the parent directory block
+                    for(size_t i = 0; i < DIR_REC_MAX; i++) {
+                        //at first i got here and hated myself because i already cleared the inode
+                        //then i remembered that i still know which inode we're killing
+                        if(file_status.inode == parent_dir.entries[i].inode) {
+                            //found you!
+                            //NOW DIE!!! or you know.. just destroy the entry
+                            parent_dir.entries[i].fname[0] = '\0';
+                            parent_dir.entries[i].inode = 0;
+                            //and reduce size
+                            --parent_dir.mdata.size;
+                        }
                     }
-                }
-                if(full_write(fs, &parent_dir, parent_inode.data_ptrs[0])) {
-                    return 0;
-                } //else failed to write back updated parent directory block
-            } //else failed to get parent directory block
-            //} //else failed to get file or parent inode
+                    //write parent directory block back out
+                    if(full_write(fs, &parent_dir, parent_inode.data_ptrs[0])) {
+                        //congratulations, file removal complete
+                        return 0;
+                    } //else failed to write back updated parent directory block
+                } //else failed to get parent directory block
+            } //else failed to get file or parent inode
         } //else failed to locate file
     } //else bad parameter
     return -1;
@@ -526,7 +586,6 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
         //check the ith direct ptr
         if(!(f_inode->data_ptrs[i])) {
             //request new direct block and validate
-            ++(num);
             f_inode->data_ptrs[i] = back_store_allocate(fs->bs);
             if(!(f_inode->data_ptrs[i])) {
                 good = false;
@@ -548,7 +607,6 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
         if(!(f_inode->data_ptrs[6])) {
             //request new indirect block and validate
             f_inode->data_ptrs[6] = back_store_allocate(fs->bs);
-            ++(num);
             if(!(f_inode->data_ptrs[6])) {
                 good = false;
             }
@@ -568,7 +626,6 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
                     //request new data block and validate
                     i_block[h] = back_store_allocate(fs->bs);
                     //printf("new indirect -> data %d\n", h);
-                    ++(num);
                     if(!i_block[h]) {
                         good = false;
                     }
@@ -592,7 +649,6 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
         block_ptr_t d_block[INDIRECT_TOTAL] = {0};
         //check dbl indirect ptr
         if(!(f_inode->data_ptrs[7])) {
-            ++(num);
             //request new double indirect block
             f_inode->data_ptrs[7] = back_store_allocate(fs->bs);
             if(!(f_inode->data_ptrs[7])) {
@@ -616,7 +672,6 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
                 if(!d_block[k]) {
                     //request new indirect block
                     d_block[k] = back_store_allocate(fs->bs);
-                    ++(num);
                     if(!d_block[k]) {
                         good = false;
                     }
@@ -634,7 +689,6 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
                         if(!i_block[h]) {
                             //request new data block and validate
                             i_block[h] = back_store_allocate(fs->bs);
-                            ++(num);
                             if(!i_block[h]) {
                                 good = false;
                             }
@@ -663,27 +717,3 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
     //calling functions need to check all the ptr they try to use
     return;
 }
-
-/*
-void print_file(S16FS_t *fs, inode_t *f_inode) {
-    size_t f_blocks = f_inode->mdata.size / BLOCK_SIZE;
-    if(f_inode->mdata.size % BLOCK_SIZE) {
-        ++f_blocks;
-    }
-
-    block_ptr_t block_ptrs[f_blocks];
-    get_data_block_ptrs(fs, f_inode, 0, f_blocks, block_ptrs);
-
-    char data[f_blocks*BLOCK_SIZE];
-
-    for(size_t i = 0; i < f_blocks; i++) {
-        full_read(fs, data+(i*BLOCK_SIZE), block_ptrs[i]);
-    }
-
-    int fd = open(f_inode->fname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-    write(fd, data, f_blocks*BLOCK_SIZE);
-    close(fd);
-
-    return;
-}
-*/
