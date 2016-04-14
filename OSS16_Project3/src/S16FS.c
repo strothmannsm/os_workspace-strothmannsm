@@ -310,14 +310,6 @@ ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
             //fill array of block ptrs with existing or newly allocated ptrs
             get_data_block_ptrs(fs, &f_inode, position, n_write_blocks, writable_ptrs);
 
-            //get data blocks to write to
-            // uint8_t buffer[n_write_blocks * BLOCK_SIZE];
-            // for(size_t i = 0; i < n_write_blocks && writable_ptrs[i]; i++) {
-            //     if(!full_read(fs, buffer+i*BLOCK_SIZE, writable_ptrs[i])) {
-            //         return -1;
-            //     }
-            // }
-
             ssize_t bytes_written = 0;
 
             //loop through all the blocks in the buffer and copy data
@@ -326,46 +318,42 @@ ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
                     //special handling for first block to write in case it's partially full
                     uint8_t data[BLOCK_SIZE];
                     if(!full_read(fs, data, writable_ptrs[i])) {
+                        //no writing happened just get out of here
                         return -1;
                     }
                     memcpy(data+log_block_offset, src, log_block_writable);
                     if(!full_write(fs, data, writable_ptrs[i])) {
+                        //no writing happened just get out of here
                         return -1;
                     }
-                    // if(!partial_write(fs, src, writable_ptrs[i], log_block_offset, log_block_writable)) {
-                    //     return -1;
-                    // }
                     bytes_written += log_block_writable;
                 } else if(i == n_write_blocks - 1 && last_block_writable) {
                     //special handling for last block to write in case we have a non-full block at the end
                     uint8_t data[BLOCK_SIZE];
                     if(!full_read(fs, data, writable_ptrs[i])) {
+                        //some writing happened, get out of loop
                         break;
                     }
                     memcpy(data, INCREMENT_VOID(src, bytes_written), last_block_writable);
                     if(!full_write(fs, data, writable_ptrs[i])) {
+                        //some writing happened, get out of loop
                         break;
                     }
-                    // if(!partial_write(fs, INCREMENT_VOID(src, bytes_written), writable_ptrs[i], 0, last_block_writable)) {
-                    //     break;
-                    // }
                     bytes_written += last_block_writable;
                 } else {
                     //full blocks in between the first block and last block
                     if(!full_write(fs, INCREMENT_VOID(src, bytes_written), writable_ptrs[i])){
+                        //some writing happened, get out of loop
                         break;
                     }
-                    //memcpy(buffer+(i*BLOCK_SIZE), INCREMENT_VOID(src, bytes_written), BLOCK_SIZE);
                     bytes_written += BLOCK_SIZE;
                 }
             }
-
-            //write data blocks back out
-            // for(size_t i = 0; i < n_write_blocks && writable_ptrs[i]; i++) {
-            //     if(!full_write(fs, buffer+i*BLOCK_SIZE, writable_ptrs[i])) {
-            //         return -1;
-            //     }
-            // }
+            //if we broke out of the loop because of an error, we still have a problem...
+            //blocks may have been allocated, but not written
+            //technically we should figure that out and release any and all blocks that weren't used
+            //because they won't be considered part of the file based on file size
+            //however they are in the inode so subsequent writes could/would use those blocks
 
             //update offset in fd_table and file size
             fs->fd_table.fd_pos[fd] += bytes_written;
