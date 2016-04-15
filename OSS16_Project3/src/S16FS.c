@@ -264,12 +264,13 @@ int fs_close(S16FS_t *fs, int fd) {
 ///   R/W position in incremented by the number of bytes written
 /// \param fs The S16FS containing the file
 /// \param fd The file to write to
-/// \param dst The buffer to read from
+/// \param src The buffer to read from
 /// \param nbyte The number of bytes to write
 /// \return number of bytes written (< nbyte IFF out of space), < 0 on error
 ///
 ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
     if(fs && FD_VALID(fd) && bitmap_test(fs->fd_table.fd_status, fd) && src) {
+        if(nbyte == 0) {return 0;}
         //let's do this... hopefully... maybe???? -- so this was hard... but i did it!!
         //extract the inode number from fd_table and get the inode
         inode_ptr_t f_inode_ptr = fs->fd_table.fd_inode[fd];
@@ -312,31 +313,18 @@ ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
 
             ssize_t bytes_written = 0;
 
-            //loop through all the blocks in the buffer and copy data
+            //loop through all the blocks  and copy data from src
             for(size_t i = 0; i < n_write_blocks && writable_ptrs[i]; i++) {
                 if(i == 0) {
                     //special handling for first block to write in case it's partially full
-                    uint8_t data[BLOCK_SIZE];
-                    if(!full_read(fs, data, writable_ptrs[i])) {
-                        //no writing happened just get out of here
-                        return -1;
-                    }
-                    memcpy(data+log_block_offset, src, log_block_writable);
-                    if(!full_write(fs, data, writable_ptrs[i])) {
-                        //no writing happened just get out of here
-                        return -1;
+                    //THANKS FOR FIXING PARTIAL WRITE.. this is better than doing it manually
+                    if(!partial_write(fs, INCREMENT_VOID(src, 0), writable_ptrs[i], log_block_offset, log_block_writable)) {
+                        break;
                     }
                     bytes_written += log_block_writable;
                 } else if(i == n_write_blocks - 1 && last_block_writable) {
                     //special handling for last block to write in case we have a non-full block at the end
-                    uint8_t data[BLOCK_SIZE];
-                    if(!full_read(fs, data, writable_ptrs[i])) {
-                        //some writing happened, get out of loop
-                        break;
-                    }
-                    memcpy(data, INCREMENT_VOID(src, bytes_written), last_block_writable);
-                    if(!full_write(fs, data, writable_ptrs[i])) {
-                        //some writing happened, get out of loop
+                    if(!partial_write(fs, INCREMENT_VOID(src, bytes_written), writable_ptrs[i], 0, last_block_writable)) {
                         break;
                     }
                     bytes_written += last_block_writable;
@@ -510,7 +498,45 @@ int fs_remove(S16FS_t *fs, const char *path) {
 /// \param whence Position from which offset is applied
 /// \return offset from BOF, < 0 on error
 ///
-off_t fs_seek(S16FS_t *fs, int fd, off_t offset, seek_t whence);
+off_t fs_seek(S16FS_t *fs, int fd, off_t offset, seek_t whence) {
+    if(fs && FD_VALID(fd) && bitmap_test(fs->fd_table.fd_status, fd)) {
+        inode_t f_inode;
+        if(read_inode(fs, &f_inode, fs->fd_table.fd_inode[fd])) {
+            //
+            off_t bof = 0;
+            off_t eof = f_inode.mdata.size;
+            off_t position = fs->fd_table.fd_pos[fd];
+
+            switch(whence) {
+                case FS_SEEK_SET: //set position to offset
+                    position = offset;
+                    break;
+                case FS_SEEK_CUR: //set position to current position + offset
+                    position += offset;
+                    break;
+                case FS_SEEK_END: //set position to EOF
+                    position = eof;
+                    break;
+                default:
+                    break;
+            }
+
+            //disable seeking before BOF or past EOF
+            if(position < bof) {
+                position = bof;
+            } else if(position > eof) {
+                position = eof;
+            }
+
+            //update fd_table
+            fs->fd_table.fd_pos[fd] = position;
+
+            return position;
+
+        } //else failed to read inode
+    } //else bad parameter
+    return -1;
+}
 
 ///
 /// Reads data from the file linked to the given descriptor
@@ -522,7 +548,87 @@ off_t fs_seek(S16FS_t *fs, int fd, off_t offset, seek_t whence);
 /// \param nbyte The number of bytes to read
 /// \return number of bytes read (< nbyte IFF read passes EOF), < 0 on error
 ///
-ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte);
+ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte) {
+    if(fs && FD_VALID(fd) && bitmap_test(fs->fd_table.fd_status, fd) && dst) {
+        //let's do this... hopefully... maybe???? -- so this was hard... but i did it!!
+        //extract the inode number from fd_table and get the inode
+        inode_ptr_t f_inode_ptr = fs->fd_table.fd_inode[fd];
+        inode_t f_inode;
+        if(read_inode(fs, &f_inode, f_inode_ptr)) {
+            size_t position = fs->fd_table.fd_pos[fd]; //postion in file to start writing
+            size_t log_block_offset = POSITION_TO_INNER_OFFSET(position); //position offset within logical block
+            
+            //cut up nbyte into chunks for logical block, full blocks, and last block
+            size_t log_block_readable = BLOCK_SIZE - log_block_offset; //bytes left in logical block
+            size_t full_block_readable; //number of full blocks to write
+            size_t last_block_readable; //number of leftover bytes to write after logical block and full blocks
+
+            //limit reading to EOF
+            size_t limit = nbyte;
+            if(position + nbyte > f_inode.mdata.size) {
+                limit = f_inode.mdata.size - position;
+            }
+
+            //if nbyte is bigger than what's available in the first logical block
+            if(limit > log_block_readable) {
+                //we might need more full blocks and/or a partial block at the end
+                full_block_readable = (limit - log_block_readable) / BLOCK_SIZE;
+                last_block_readable = (limit - log_block_readable) % BLOCK_SIZE;
+            } else {
+                // else enough room in logical block to write
+                log_block_readable = limit;
+                full_block_readable = 0;
+                last_block_readable = 0;
+            }
+
+            //figure out the number of blocks needed for writing
+            size_t n_read_blocks = 1 + full_block_readable;
+            if(last_block_readable) {
+                ++n_read_blocks;
+            }
+
+            //initialize array of data block ptrs
+            block_ptr_t readable_ptrs[n_read_blocks];
+            for(size_t i = 0; i < n_read_blocks; i++) {
+                readable_ptrs[i] = 0;
+            }
+            
+            //fill array of block ptrs with existing or newly allocated ptrs
+            get_data_block_ptrs(fs, &f_inode, position, n_read_blocks, readable_ptrs);
+
+            ssize_t bytes_read = 0;
+
+            //loop through all the blocks and copy data to the buffer
+            for(size_t i = 0; i < n_read_blocks && readable_ptrs[i]; i++) {
+                if(i == 0) {
+                    //special handling for first block to read in case it's partially full
+                    if(!partial_read(fs, INCREMENT_VOID(dst, 0), readable_ptrs[i], log_block_offset, log_block_readable)) {
+                        break;
+                    }
+                    bytes_read += log_block_readable;
+                } else if(i == n_read_blocks - 1 && last_block_readable) {
+                    //special handling for last block to read in case we have a non-full block at the end
+                    if(!partial_read(fs, INCREMENT_VOID(dst, bytes_read), readable_ptrs[i], 0, last_block_readable)) {
+                        break;
+                    }
+                    bytes_read += last_block_readable;
+                } else {
+                    //full blocks in between the first block and last block
+                    if(!full_read(fs, INCREMENT_VOID(dst, bytes_read), readable_ptrs[i])) {
+                        break;
+                    }
+                    bytes_read += BLOCK_SIZE;
+                }
+            }
+
+            //update offset in fd_table and file size
+            fs->fd_table.fd_pos[fd] += bytes_read;
+
+            return bytes_read;
+        } //else failed to read inode
+    } //else bad parameter
+    return -1;
+}
 
 ///
 /// Populates a dyn_array with information about the files in a directory
@@ -531,7 +637,28 @@ ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte);
 /// \param path Absolute path to the directory to inspect
 /// \return dyn_array of file records, NULL on error
 ///
-dyn_array_t *fs_get_dir(S16FS_t *fs, const char *path);
+dyn_array_t *fs_get_dir(S16FS_t *fs, const char *path) {
+    if(fs && path) {
+        result_t file_status;
+        locate_file(fs, path, &file_status);
+        if(file_status.success && file_status.found && file_status.type == FS_DIRECTORY) {
+            inode_t f_inode;
+            dir_block_t dir;
+            if(read_inode(fs, &f_inode, file_status.inode) && full_read(fs, &dir, file_status.block)) {
+                dyn_array_t *entries = dyn_array_create(0, sizeof(dir_ent_t), NULL);
+                if(entries) {
+                    for(int i = 0; i < DIR_REC_MAX; i++) {
+                        if(dir.entries[i].fname[0]) {
+                            dyn_array_push_back(entries, &dir.entries[i]);
+                        }
+                    }
+                    return entries;
+                } //else failed to create dyn_array
+            } //else failed to read inode or directory block
+        } //else bad path to directory or not a directory
+    } //else bad parameter
+    return NULL;
+}
 
 ///
 /// !!! Graduate Level/Undergrad Bonus !!!
@@ -544,13 +671,66 @@ dyn_array_t *fs_get_dir(S16FS_t *fs, const char *path);
 /// \param dst Absolute path to move the file to
 /// \return 0 on success, < 0 on error
 ///
-int fs_move(S16FS_t *fs, const char *src, const char *dst);
+int fs_move(S16FS_t *fs, const char *src, const char *dst) {
+    if(fs && src && dst) {
+        result_t source_status;
+        result_t destination_status;
+        locate_file(fs, src, &source_status);
+        locate_file(fs, dst, &destination_status);
+        if(source_status.success && source_status.found && 
+            destination_status.success && destination_status.found && destination_status.type == FS_DIRECTORY) {
+
+            inode_t f_inode; //src file inode
+            inode_t parent_inode; //src file parent inode
+            inode_t dst_inode; //destination directory inode
+            if(read_inode(fs, &f_inode, source_status.inode) && read_inode(fs, &parent_inode, source_status.parent) &&
+                read_inode(fs, &dst_inode, destination_status.inode)) {
+
+                dir_block_t parent_block;
+                dir_block_t destination_block;
+                if(full_read(fs, &parent_block, parent_inode.data_ptrs[0]) && 
+                    full_read(fs, &destination_block, dst_inode.data_ptrs[0]) && 
+                    destination_block.mdata.size < DIR_REC_MAX) {
+
+                    //add to destination_block
+                    //remove from parent_block
+                    for(int i = 0; i < DIR_REC_MAX; i++) {
+                        //find available entry in destination and set
+                        if(destination_block.entries[i].fname[0] == '\0') {
+                            memcpy(destination_block.entries[i].fname, f_inode.fname, FS_FNAME_MAX);
+                            destination_block.entries[i].inode = source_status.inode;
+                            ++destination_block.mdata.size;
+                        }
+                        //find entry in parent and unset
+                        if(parent_block.entries[i].inode == source_status.inode) {
+                            parent_block.entries[i].fname[0] = '\0';
+                            parent_block.entries[i].inode = 0;
+                            --parent_block.mdata.size;
+                        }
+                    }
+
+                    //update f_inode.mdata.parent
+                    f_inode.mdata.parent = destination_status.inode;
+
+                    //write f_inode, parent_block and destination_block
+                    if(write_inode(fs, &f_inode, source_status.inode) && 
+                        full_write(fs, &parent_block, parent_inode.data_ptrs[0]) && 
+                        full_write(fs, &destination_block, dst_inode.data_ptrs[0])) {
+
+                        return 0;
+                    } //else failed to write src inode or directory blocks back out
+                } //else failed to read parent or destination directory block or destination is full
+            } //else failed to read src, src parent or destination inode
+        } //else failed to find src file or dst directory
+    } //else bad parameter
+    return -1;
+}
 
 ///
 /// Fills array of block_ptr_t with ptrs to data blocks requested
 ///     write can request blocks that don't exist, therefore block allocation will occur
 ///     remove gets all the block ptrs already allocated to a file
-///     read will get all block ptrs requested up to EOF, no allocation
+///     read will get requested block ptrs requested up to EOF, no allocation
 /// \param fs - The S16FS containing the file
 /// \param f_inode - pointer to the file's inode in memory
 /// \param position - byte offset in file to start getting blocks
