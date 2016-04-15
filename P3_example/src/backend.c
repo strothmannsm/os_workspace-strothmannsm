@@ -12,7 +12,7 @@ bool partial_read(const S16FS_t *fs, void *data, const block_ptr_t block, const 
     if (fs && data && BLOCK_PTR_VALID(block) && offset < BLOCK_SIZE && bytes) {
         data_block_t buffer;
         if (back_store_read(fs->bs, block, &buffer)) {
-            memcpy(data, &buffer + offset, bytes);
+            memcpy(data, INCREMENT_VOID(&buffer, offset), bytes);
             return true;
         }
     }
@@ -28,7 +28,7 @@ bool partial_write(S16FS_t *fs, const void *data, const block_ptr_t block, const
         // Scratch that, return false. If it actually happens, it should be reported
         data_block_t buffer;
         if (back_store_read(fs->bs, block, &buffer)) {
-            memcpy(&buffer + offset, data, bytes);
+            memcpy(INCREMENT_VOID(&buffer, offset, data, bytes);
             return back_store_write(fs->bs, block, &buffer);
         }
     }

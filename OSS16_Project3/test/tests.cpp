@@ -695,32 +695,7 @@ TEST(e_tests, remove_file) {
     ASSERT_EQ(system("cp d_tests_full.s16fs e_tests_a.s16fs"), 0);
     ASSERT_EQ(system("cp c_tests.s16fs e_tests_b.s16fs"), 0);
 
-    S16FS_t *fs = fs_mount(test_fname[0]);
-    ASSERT_NE(fs, nullptr);
-
-    // FS_REMOVE 1
-    ASSERT_EQ(fs_remove(fs, a_fnames[1]), 0);
-
-    // FS_REMOVE 4
-    ASSERT_EQ(fs_remove(fs, a_fnames[0]), 0);
-
-    // FS_REMOVE 6
-    ASSERT_LT(fs_remove(fs, a_fnames[3]), 0);
-
-    // FS_REMOVE 7
-    ASSERT_LT(fs_remove(fs, "/"), 0);
-
-    // FS_REMOVE 8
-    ASSERT_LT(fs_remove(NULL, a_fnames[1]), 0);
-
-    // FS_REMOVE 9
-    ASSERT_LT(fs_remove(fs, NULL), 0);
-
-    fs_unmount(fs);
-
-    score += 10;
-
-    fs = fs_mount(test_fname[1]);
+    S16FS_t *fs = fs_mount(test_fname[1]);
     ASSERT_NE(fs, nullptr);
 
     // FS_REMOVE 10
@@ -743,6 +718,32 @@ TEST(e_tests, remove_file) {
     // FS_REMOVE 3
     ASSERT_EQ(fs_remove(fs, b_fnames[1]), 0);
 
+
+    fs_unmount(fs);
+
+    score += 10;
+
+
+    fs = fs_mount(test_fname[0]);
+    ASSERT_NE(fs, nullptr);
+
+    // FS_REMOVE 1
+    ASSERT_EQ(fs_remove(fs, a_fnames[1]), 0);
+
+    // FS_REMOVE 4
+    ASSERT_EQ(fs_remove(fs, a_fnames[0]), 0);
+
+    // FS_REMOVE 6
+    ASSERT_LT(fs_remove(fs, a_fnames[3]), 0);
+
+    // FS_REMOVE 7
+    ASSERT_LT(fs_remove(fs, "/"), 0);
+
+    // FS_REMOVE 8
+    ASSERT_LT(fs_remove(NULL, a_fnames[1]), 0);
+
+    // FS_REMOVE 9
+    ASSERT_LT(fs_remove(fs, NULL), 0);
 
     fs_unmount(fs);
 
