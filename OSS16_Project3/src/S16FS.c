@@ -500,6 +500,7 @@ int fs_remove(S16FS_t *fs, const char *path) {
 ///
 off_t fs_seek(S16FS_t *fs, int fd, off_t offset, seek_t whence) {
     if(fs && FD_VALID(fd) && bitmap_test(fs->fd_table.fd_status, fd)) {
+        //need the inode for limiting seeks to EOF
         inode_t f_inode;
         if(read_inode(fs, &f_inode, fs->fd_table.fd_inode[fd])) {
             //
@@ -550,7 +551,7 @@ off_t fs_seek(S16FS_t *fs, int fd, off_t offset, seek_t whence) {
 ///
 ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte) {
     if(fs && FD_VALID(fd) && bitmap_test(fs->fd_table.fd_status, fd) && dst) {
-        //let's do this... hopefully... maybe???? -- so this was hard... but i did it!!
+        //so this is the exact same as fs_write except for two THINGs labeled below
         //extract the inode number from fd_table and get the inode
         inode_ptr_t f_inode_ptr = fs->fd_table.fd_inode[fd];
         inode_t f_inode;
@@ -558,30 +559,32 @@ ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte) {
             size_t position = fs->fd_table.fd_pos[fd]; //postion in file to start writing
             size_t log_block_offset = POSITION_TO_INNER_OFFSET(position); //position offset within logical block
             
-            //cut up nbyte into chunks for logical block, full blocks, and last block
+            //THING 1: limit reading to EOF
+            size_t limit = nbyte;
+            if(position + nbyte > f_inode.mdata.size) {
+                //nbyte is more than there is left in the file
+                //so limit to how many bytes are left in the file
+                limit = f_inode.mdata.size - position;
+            }
+
+            //cut up limit into chunks for logical block, full blocks, and last block
             size_t log_block_readable = BLOCK_SIZE - log_block_offset; //bytes left in logical block
             size_t full_block_readable; //number of full blocks to write
             size_t last_block_readable; //number of leftover bytes to write after logical block and full blocks
 
-            //limit reading to EOF
-            size_t limit = nbyte;
-            if(position + nbyte > f_inode.mdata.size) {
-                limit = f_inode.mdata.size - position;
-            }
-
-            //if nbyte is bigger than what's available in the first logical block
+            //if limit is bigger than what's available in the first logical block
             if(limit > log_block_readable) {
                 //we might need more full blocks and/or a partial block at the end
                 full_block_readable = (limit - log_block_readable) / BLOCK_SIZE;
                 last_block_readable = (limit - log_block_readable) % BLOCK_SIZE;
             } else {
-                // else enough room in logical block to write
+                // else enough room in logical block to read
                 log_block_readable = limit;
                 full_block_readable = 0;
                 last_block_readable = 0;
             }
 
-            //figure out the number of blocks needed for writing
+            //figure out the number of blocks needed for reading
             size_t n_read_blocks = 1 + full_block_readable;
             if(last_block_readable) {
                 ++n_read_blocks;
@@ -593,11 +596,12 @@ ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte) {
                 readable_ptrs[i] = 0;
             }
             
-            //fill array of block ptrs with existing or newly allocated ptrs
+            //can you tell what this function does.. IT GETS DATA BLOCK PTRS!!
             get_data_block_ptrs(fs, &f_inode, position, n_read_blocks, readable_ptrs);
 
             ssize_t bytes_read = 0;
 
+            //THING 2: this is actually mostly the same as fs_write except we're reading instead of writing
             //loop through all the blocks and copy data to the buffer
             for(size_t i = 0; i < n_read_blocks && readable_ptrs[i]; i++) {
                 if(i == 0) {
@@ -621,7 +625,7 @@ ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte) {
                 }
             }
 
-            //update offset in fd_table and file size
+            //update offset in fd_table
             fs->fd_table.fd_pos[fd] += bytes_read;
 
             return bytes_read;
@@ -639,20 +643,32 @@ ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte) {
 ///
 dyn_array_t *fs_get_dir(S16FS_t *fs, const char *path) {
     if(fs && path) {
+        //find the directory
         result_t file_status;
         locate_file(fs, path, &file_status);
         if(file_status.success && file_status.found && file_status.type == FS_DIRECTORY) {
+            //got the directory (and it is a directory) now get the inode and block
             inode_t f_inode;
             dir_block_t dir;
             if(read_inode(fs, &f_inode, file_status.inode) && full_read(fs, &dir, file_status.block)) {
+                //got the inode and block now create the dyn_array and get all (if any) entries
                 dyn_array_t *entries = dyn_array_create(0, sizeof(dir_ent_t), NULL);
                 if(entries) {
-                    for(int i = 0; i < DIR_REC_MAX; i++) {
+                    bool good = true;
+                    for(int i = 0; i < DIR_REC_MAX && good; i++) {
                         if(dir.entries[i].fname[0]) {
-                            dyn_array_push_back(entries, &dir.entries[i]);
+                            //don't you just LOVE pointers.. i kinda do right now
+                            //better than creating a dir_ent_t, copying the entry and then pushing
+                            if(!dyn_array_push_back(entries, &dir.entries[i])) {
+                                good = false;
+                            }
                         }
                     }
-                    return entries;
+                    //aaaaaaaaaannnnnnndddddd... we're done (if all is well that is)
+                    if(good) {
+                        return entries;
+                    } //else failed to push an entry to the dyn_array
+                    dyn_array_destroy(entries);
                 } //else failed to create dyn_array
             } //else failed to read inode or directory block
         } //else bad path to directory or not a directory
@@ -673,6 +689,7 @@ dyn_array_t *fs_get_dir(S16FS_t *fs, const char *path) {
 ///
 int fs_move(S16FS_t *fs, const char *src, const char *dst) {
     if(fs && src && dst) {
+        //find the file to move and the directory to move it to
         result_t source_status;
         result_t destination_status;
         locate_file(fs, src, &source_status);
@@ -680,20 +697,21 @@ int fs_move(S16FS_t *fs, const char *src, const char *dst) {
         if(source_status.success && source_status.found && 
             destination_status.success && destination_status.found && destination_status.type == FS_DIRECTORY) {
 
+            //found the file and the destination directory now get all the inodes we need
             inode_t f_inode; //src file inode
             inode_t parent_inode; //src file parent inode
             inode_t dst_inode; //destination directory inode
             if(read_inode(fs, &f_inode, source_status.inode) && read_inode(fs, &parent_inode, source_status.parent) &&
                 read_inode(fs, &dst_inode, destination_status.inode)) {
 
+                //have all the inodes, now get parent and destination directory blocks
                 dir_block_t parent_block;
                 dir_block_t destination_block;
                 if(full_read(fs, &parent_block, parent_inode.data_ptrs[0]) && 
                     full_read(fs, &destination_block, dst_inode.data_ptrs[0]) && 
                     destination_block.mdata.size < DIR_REC_MAX) {
 
-                    //add to destination_block
-                    //remove from parent_block
+                    //add to destination_block and remove from parent_block
                     for(int i = 0; i < DIR_REC_MAX; i++) {
                         //find available entry in destination and set
                         if(destination_block.entries[i].fname[0] == '\0') {
@@ -709,7 +727,7 @@ int fs_move(S16FS_t *fs, const char *src, const char *dst) {
                         }
                     }
 
-                    //update f_inode.mdata.parent
+                    //update inode so it knows its new mommy
                     f_inode.mdata.parent = destination_status.inode;
 
                     //write f_inode, parent_block and destination_block
@@ -728,30 +746,32 @@ int fs_move(S16FS_t *fs, const char *src, const char *dst) {
 
 ///
 /// Fills array of block_ptr_t with ptrs to data blocks requested
-///     write can request blocks that don't exist, therefore block allocation will occur
-///     remove gets all the block ptrs already allocated to a file
-///     read will get requested block ptrs requested up to EOF, no allocation
+///     write can request blocks past EOF allocating new blocks as available
+///     remove gets all the data block ptrs already allocated to a file
+///     read requests blocks up to (not past) EOF
 /// \param fs - The S16FS containing the file
 /// \param f_inode - pointer to the file's inode in memory
 /// \param position - byte offset in file to start getting blocks
-///     write uses position from fd_table
+///     read/write use position from fd_table
 ///     remove uses 0
-///     read will use position from fd_table
 /// \param n_blocks - number of blocks to get
-///     write only needs enough blocks to write requested number of bytes
+///     read/write only need enough blocks to read/write requested number of bytes
 ///     remove needs all the blocks
-///     read will only need enough blocks to read requested number of bytes
 /// \param ptrs - block_ptr_t array to be filled
 ///
 void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t n_blocks, block_ptr_t *ptrs) {
+    //do we really need to error check parameters to helper functions?
+    //they've all been validated already...
+
     size_t log_block_index = POSITION_TO_BLOCK_INDEX(position); //logical index for first block requested
     size_t j = 0; //for ptrs array indexing
     size_t i = log_block_index; //logical file block indexing
-    bool good = true;
+    bool good = true; //to keep track of how things are going
+    //if anything goes wrong "good = false" and we'll pretty much just skip all the way to return
 
-    //get direct ptrs
+    //get direct data block ptrs if requested
     while(i < DIRECT_TOTAL && j < n_blocks && good) {
-        //check the ith direct ptr
+        //check if we need to allocate ith direct block
         if(!(f_inode->data_ptrs[i])) {
             //request new direct block and validate
             f_inode->data_ptrs[i] = back_store_allocate(fs->bs);
@@ -771,7 +791,7 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
     //get single indirect data block ptrs if requested
     if(i < (DIRECT_TOTAL + INDIRECT_TOTAL) && j < n_blocks && good) {
         block_ptr_t i_block[INDIRECT_TOTAL] = {0};
-        //check indirect ptr
+        //check if we need to allocate new indirect block
         if(!(f_inode->data_ptrs[6])) {
             //request new indirect block and validate
             f_inode->data_ptrs[6] = back_store_allocate(fs->bs);
@@ -785,21 +805,23 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
             }
         }
         if(good) {
-            //we have an indirect block in i_block, either new or existing
+            //we have an indirect block in i_block, either new (all {0}) or existing (read from back_store)
             //loop to get data blocks
+            //need to start counter at appropriate offset in case the first block requested
+            //  is somewhere in the middle of the indirect block
+            //side note: i've never been so thankful that array indexing starts at 0
             size_t h = (i-DIRECT_TOTAL) % INDIRECT_TOTAL;
             for(; h < INDIRECT_TOTAL && j < n_blocks && good; h++) {
-                //check if we need to allocate a block
+                //check if we need to allocate a new data block
                 if(!i_block[h]) {
                     //request new data block and validate
                     i_block[h] = back_store_allocate(fs->bs);
-                    //printf("new indirect -> data %d\n", h);
                     if(!i_block[h]) {
                         good = false;
                     }
                 }
                 if(good) {
-                    //all is well, get data block ptr
+                    //get data block ptr
                     ptrs[j] = i_block[h];
                     ++j;
                     ++i;
@@ -812,10 +834,10 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
         }
     }
 
-    //get double indirect data blocks ptrs if requested
+    //get double indirect data block ptrs if requested
     if(j < n_blocks && good) {
         block_ptr_t d_block[INDIRECT_TOTAL] = {0};
-        //check dbl indirect ptr
+        //check if we need to allocate double indirect block
         if(!(f_inode->data_ptrs[7])) {
             //request new double indirect block
             f_inode->data_ptrs[7] = back_store_allocate(fs->bs);
@@ -829,12 +851,14 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
             }
         }
         if(good) {
-            //now we do the same damn thing as for single indirect.. 
+            //now we do the same damn thing as for single indirect.. except multiple times possibly
             //maybe this should be modularized, but whatever
             //outer loop gets indirect blocks
+            //same loop counter issues as single indirect.
+            //if the first block requested is somewhere in the middle we need to go straight
+            //  to that indirect block (k)
             size_t k = (i-(DIRECT_TOTAL + INDIRECT_TOTAL)) / INDIRECT_TOTAL;
             for(; j < n_blocks && good && k < INDIRECT_TOTAL; k++) {
-
                 block_ptr_t i_block[INDIRECT_TOTAL] = {0};
                 //check if we need to allocate kth indirect block
                 if(!d_block[k]) {
@@ -844,13 +868,15 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
                         good = false;
                     }
                 } else {
-                    //get kth indirect block
+                    //get existing indirect block
                     if(!full_read(fs, i_block, d_block[k])) {
                         good = false;
                     }
                 }
                 if(good) {
                     //inner loop to get data blocks from kth indirect block
+                    //again with the loop counters...
+                    //go straight to first block requested
                     size_t h = (i-(DIRECT_TOTAL + INDIRECT_TOTAL)) % INDIRECT_TOTAL;
                     for(; j < n_blocks && good && h < INDIRECT_TOTAL; h++) {
                         //check if we need to allocate hth data block
@@ -865,7 +891,7 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
                         if(good) {
                             ptrs[j] = i_block[h];
                             ++j;
-                            ++i;
+                            ++i; //don't really need 'i' anymore, but whatever
                         }
                     }
                     //write kth indirect block back out to save any changes
@@ -881,7 +907,7 @@ void get_data_block_ptrs(S16FS_t *fs, inode_t *f_inode, size_t position, size_t 
         }
     }
 
-    //if anything went wrong, ptrs array has 0's
-    //calling functions need to check all the ptr they try to use
+    //if anything went wrong (ie the file system is full), ptrs array has 0's from that point onward
+    //calling functions need to check all the ptrs they try to use (especially write)
     return;
 }
