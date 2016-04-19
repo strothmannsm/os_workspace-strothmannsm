@@ -212,7 +212,30 @@ int fs_create(S16FS_t *fs, const char *path, file_t type) {
 /// \param path path to the requested file
 /// \return file descriptor to the requested file, < 0 on error
 ///
-int fs_open(S16FS_t *fs, const char *path);
+int fs_open(S16FS_t *fs, const char *path) {
+    if (fs && path) {
+        // Well, find the file, log it. That's it?
+        // faster to find an open descriptor, so we'll knock that out first.
+        size_t open_descriptor = bitmap_ffz(fs->fd_table.fd_status);
+        if (open_descriptor != SIZE_MAX) {
+            result_t file_info;
+            locate_file(fs, path, &file_info);
+            if (file_info.success && file_info.found && file_info.type == FS_REGULAR) {
+                // cool. Done.
+                bitmap_set(fs->fd_table.fd_status, open_descriptor);
+                fs->fd_table.fd_pos[open_descriptor]   = 0;
+                fs->fd_table.fd_inode[open_descriptor] = file_info.inode;
+                // ... auto-aligning assignments in cute until this happens.
+                return open_descriptor;
+            }
+            // ... I really should be returning multiple error codes
+            // I wrote the spec so you could do this and then I just don't
+            // Like those error debugging macros.
+            // Do as I say, not as I do.
+        }
+    }
+    return -1;
+}
 
 ///
 /// Closes the given file descriptor
@@ -220,7 +243,30 @@ int fs_open(S16FS_t *fs, const char *path);
 /// \param fd The file to close
 /// \return 0 on success, < 0 on failure
 ///
-int fs_close(S16FS_t *fs, int fd);
+int fs_close(S16FS_t *fs, int fd) {
+    if (fs && fd < DESCRIPTOR_MAX && fd >= 0) {
+        // Oh man, now I feel bad.
+        // There's 0% chance bitmap will detect out of bounds and stop
+        // So everyone's going to segfault if they don't range check the fd first.
+        // Because in the C++ version, I could just throw.
+        // Maybe I should just replace bitmap with the C++ version
+        // and expose a C interface that just throws. ...not that it's really better
+        // At least you'll see bitmap throwing as opposed to segfault (core dumped)
+        // That's unfortunate.
+
+        // I'm going to get so many emails.
+        // if (bitmap_test(fs->fd_table.fd_status,fd)) {
+        // Actually, I can just reset it. If it's not set, unsetting it doesn't do anything.
+        // Bits, man.
+
+        // But actually it fails the test since I say it was ok
+        if (bitmap_test(fs->fd_table.fd_status, fd)) {
+            bitmap_reset(fs->fd_table.fd_status, fd);
+            return 0;
+        }
+    }
+    return -1;
+}
 
 ///
 /// Writes data from given buffer to the file linked to the descriptor
@@ -233,7 +279,51 @@ int fs_close(S16FS_t *fs, int fd);
 /// \param nbyte The number of bytes to write
 /// \return number of bytes written (< nbyte IFF out of space), < 0 on error
 ///
-ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte);
+ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte) {
+    if (fs && src && fd_valid(fs, fd)) {
+        if (nbyte != 0) {
+            // Alrighty, biggest issue is overwrite vs extend
+            // We gotta figure that out.
+            inode_t file_inode;
+            // Man, FDs make this nicer
+            // But, I mean, once you have locate working, it's not bad either
+            size_t *current_position = &fs->fd_table.fd_pos[fd];
+            // Perfect time for a reference. Oh C++ I miss you
+            // You can use C++, I can't, since people freak out when they see C++
+            // (even though it's like 80% the same)
+            if (read_inode(fs, &file_inode, fs->fd_table.fd_inode[fd])) {
+                // Got the inode, now we know the size. Handy.
+                write_mode_t write_mode = GET_WRITE_MODE(file_inode.mdata.size, *current_position, nbyte);
+                if (write_mode & EXTEND) {
+                    ssize_t new_filesize
+                        = extend_file(fs, &file_inode, fs->fd_table.fd_inode[fd], *current_position + nbyte);
+                    if (new_filesize < 0) {
+                        return -1;
+                    } else if (((size_t) new_filesize) < (*current_position + nbyte)) {
+                        // File could not extend enough
+                        // Set desired size to all we can do
+                        nbyte = new_filesize - *current_position;
+                    }
+                    // data hasn't been written, but the blocks have been allocated and put into place
+                    // We can write the specified ammount of bytes
+                    // Update the size here
+                }
+                if (nbyte) {
+                    ssize_t written = overwrite_file(fs, &file_inode, fs->fd_table.fd_pos[fd], src, nbyte);
+                    if (written > 0) {
+                        fs->fd_table.fd_pos[fd] += written;
+                    }
+                    return written;
+                }
+                return 0;
+            }
+        } else {
+            // Sure, I wrote zero bytes. Go team!
+            return 0;
+        }
+    }
+    return -1;
+}
 
 ///
 /// Deletes the specified file and closes all open descriptors to the file
@@ -242,7 +332,35 @@ ssize_t fs_write(S16FS_t *fs, int fd, const void *src, size_t nbyte);
 /// \param path Absolute path to file to remove
 /// \return 0 on success, < 0 on error
 ///
-int fs_remove(S16FS_t *fs, const char *path);
+int fs_remove(S16FS_t *fs, const char *path) {
+    if (fs && path) {
+        result_t file_info;
+        locate_file(fs, path, &file_info);
+        // Locate file actually checks pointers for us so... eh oh well.
+        if (file_info.success && file_info.found
+            && file_info.inode != 0) {  // test 1 of 1 million to make sure we don't kill root
+            printf("AHHHHH DELETING A FILE WHOSE NAME IS HOPEFULLY %s BECAUSE THIS ISN'T TESTED\n\n", file_info.data);
+            bool success = false;
+            switch (file_info.type) {
+                case FS_DIRECTORY:
+                    success
+                        = release_dir(fs, (char *) file_info.data, file_info.inode, file_info.parent, file_info.block);
+                    break;
+                case FS_REGULAR:
+                    success = release_regular(fs, (char *) file_info.data, file_info.inode, file_info.parent);
+                    break;
+                default:
+                    // https://youtu.be/ijmCEYWefks?t=7s
+                    break;
+            }
+            if (success) {
+                release_fds(fs,file_info.inode);
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
 
 ///
 /// Moves the R/W position of the given descriptor to the given location

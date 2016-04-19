@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <time.h>
+#include <backend.h>
 
 // Ok, less worse than a RMW, but it isn't very space efficient
 // One neat idea would be to make a shared buffer a global so both can use it
@@ -12,7 +13,7 @@ bool partial_read(const S16FS_t *fs, void *data, const block_ptr_t block, const 
     if (fs && data && BLOCK_PTR_VALID(block) && offset < BLOCK_SIZE && bytes) {
         data_block_t buffer;
         if (back_store_read(fs->bs, block, &buffer)) {
-            memcpy(data, INCREMENT_VOID(&buffer, offset), bytes);
+            memcpy(data, &buffer + offset, bytes);
             return true;
         }
     }
@@ -28,7 +29,7 @@ bool partial_write(S16FS_t *fs, const void *data, const block_ptr_t block, const
         // Scratch that, return false. If it actually happens, it should be reported
         data_block_t buffer;
         if (back_store_read(fs->bs, block, &buffer)) {
-            memcpy(INCREMENT_VOID(&buffer, offset), data, bytes);
+            memcpy(&buffer + offset, data, bytes);
             return back_store_write(fs->bs, block, &buffer);
         }
     }
@@ -89,7 +90,7 @@ bool full_write(S16FS_t *fs, const void *data, const block_ptr_t block) {
 
 
 S16FS_t *ready_file(const char *path, const bool format) {
-    S16FS_t *fs = (S16FS_t *) malloc(sizeof(S16FS_t));
+    S16FS_t *fs = (S16FS_t *) calloc(1,sizeof(S16FS_t));
     if (fs) {
         if (format) {
             // get inode table
@@ -131,6 +132,7 @@ S16FS_t *ready_file(const char *path, const bool format) {
         if (fs->bs) {
             fs->fd_table.fd_status = bitmap_create(DESCRIPTOR_MAX);
             // Eh, won't bother blanking out tables, since that's the point of the bitmap
+            // That was a bad idea, switched to calloc
             if (fs->fd_table.fd_status) {
                 return fs;
             }
@@ -168,7 +170,7 @@ void locate_file(const S16FS_t *const fs, const char *abs_path, result_t *res) {
                 // ok, path is something we should at least bother trying to look at
                 char *path_copy = strndup(abs_path, path_len);
                 if (path_copy) {
-                    result_t scan_results = {true, true, false, 0, 0, 0, 0, 0, NULL};  // hey, cool, I found root!
+                    result_t scan_results = {true, true, false, 0, 0, 0, 0, 0, 0, NULL};  // hey, cool, I found root!
                     const char *delims    = "/";
                     res->success          = true;
                     res->found            = true;  // I'm going to assume it all works out, don't go making me a liar
@@ -231,6 +233,7 @@ typedef struct {
                             Shouldn't never need it, but we know it, so we'll share
     file_t type; - IF FOUND: type of the file found
     uint64_t total; - IF SUCCESS: Number of files in the given directory
+    uint64_t pos; - IF FOUND: Entry position in directory
     void *data; - N/A
 } result_t;
 */
@@ -258,6 +261,7 @@ void scan_directory(const S16FS_t *const fs, const char *fname, const inode_ptr_
                             // found it!
                             res->found = true;
                             res->inode = dir_data.entries[i].inode;
+                            res->pos   = i;
                             return;
                         }
                     }
@@ -286,4 +290,305 @@ inode_ptr_t find_free_inode(const S16FS_t *const fs) {
         }
     }
     return 0;
+}
+
+bool wipe_parent_entry(S16FS_t *const fs, const char *fname, const inode_ptr_t parent_id) {
+    if (fs && fname) {
+        inode_t dir_inode;
+        dir_block_t dir_data;
+        if (read_inode(fs, &dir_inode, parent_id) && INODE_IS_TYPE(&dir_inode, FS_DIRECTORY)
+            && full_read(fs, &dir_data, dir_inode.data_ptrs[0])) {
+            // stripping out fname checks. Hopefully you checked it before getting here
+            for (unsigned i = 0; i < DIR_REC_MAX; ++i) {
+                if (strncmp(fname, dir_data.entries[i].fname, FS_FNAME_MAX) == 0) {
+                    // found it!
+                    // time for it to have a bad day
+                    dir_data.entries[i].fname[0] = '\0';
+                    --dir_data.mdata.size;
+                    // Ok, maybe less of a bad day. Less violent than I was expecting.
+                    return full_write(fs, &dir_data, dir_inode.data_ptrs[0]);
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// This kills the file. Make sure the info's correct.
+bool release_dir(S16FS_t *fs, const char *fname, const inode_ptr_t target_number, const inode_ptr_t parent_number,
+                 const block_ptr_t block_number) {
+    if (fs && target_number != 0 && block_number != ROOT_DIR_BLOCK) {
+        // I'm really just going to assume that the block number is the right one
+        dir_block_t target_dir;
+        if (full_read(fs, &target_dir, block_number)) {
+            if (target_dir.mdata.size == 0) {
+                // Cool, can kill dir. We should kill the parent ref first, it's safest.
+
+                // Find the record
+                // Which I'm going to implement manually, BUT should really be rolled into scan_directory
+                // But I don't want to add something to result_t for the third time
+                // ...but it really is better, so I will (result_t.pos) and then toss all this reading
+                // ...but then I have to call scan, which loads everything, to get the number
+                //    Which then forces me to reload stuff. That's gross.
+                // ...Making new function
+
+                if (wipe_parent_entry(fs, fname, parent_number)) {
+                    // Target dir is now unhooked from the dir tree
+                    // we should kill the inode first, I suppose, because it's safer
+                    if (clear_inode(fs, target_number)) {
+                        // Now we're just leaking a dir block if anything else fails
+
+                        back_store_release(fs->bs, target_number);
+                        // Well that doesn't return a status, so... I guess it worked.
+                        // I guess that was a design oversight.
+                        // Something to fix next time.
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool release_regular(S16FS_t *fs, const char *fname, const inode_ptr_t target_number, const inode_ptr_t parent_number) {
+    // ... buckle up.
+    inode_t file_inode;
+    indir_block_t indirect, dbl_indirect;
+    if (fs && target_number != 0) {
+        // Uhh, why not a root check... because... idk
+        if (wipe_parent_entry(fs, fname, parent_number)) {
+            if (read_inode(fs, &file_inode, target_number)) {
+                bool success = true;
+                if (file_inode.data_ptrs[0] != 0) {
+                    // Alrighty. These are the easy ones.
+                    for (unsigned i = 0; file_inode.data_ptrs[i] && i < DIRECT_TOTAL; ++i) {
+                        back_store_release(fs->bs, file_inode.data_ptrs[i]);
+                    }
+                    if (file_inode.data_ptrs[6] != 0) {
+                        // Oh man.
+                        if ((success = full_read(fs, &indirect, file_inode.data_ptrs[6]))) {
+                            for (unsigned i = 0; indirect.block_ptrs[i] && i < INDIRECT_TOTAL; ++i) {
+                                back_store_release(fs->bs, indirect.block_ptrs[i]);
+                            }
+                            back_store_release(fs->bs, file_inode.data_ptrs[6]);
+
+                            // Alright, now for the gross one
+                            if (file_inode.data_ptrs[7] != 0) {
+                                if ((success = full_read(fs, &dbl_indirect, file_inode.data_ptrs[7]))) {
+                                    // read the double
+                                    for (unsigned dbl_idx = 0;
+                                         success && dbl_indirect.block_ptrs[dbl_idx] && dbl_idx < INDIRECT_TOTAL;
+                                         ++dbl_idx) {
+                                        if ((success = full_read(fs, &indirect, dbl_indirect.block_ptrs[dbl_idx]))) {
+                                            // got the indir
+                                            for (unsigned i = 0; indirect.block_ptrs[i] && i < INDIRECT_TOTAL; ++i) {
+                                                back_store_release(fs->bs, indirect.block_ptrs[i]);
+                                            }
+                                            back_store_release(fs->bs, dbl_indirect.block_ptrs[dbl_idx]);
+                                        }
+                                    }
+                                    if (success) {
+                                        back_store_release(fs->bs, file_inode.data_ptrs[7]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return success ? clear_inode(fs, target_number) : false;
+            }
+        }
+    }
+    return false;
+}
+
+bool fd_valid(const S16FS_t *const fs, int fd) {
+    return fs && fd >= 0 && fd < DESCRIPTOR_MAX && bitmap_test(fs->fd_table.fd_status, fd);
+}
+
+ssize_t overwrite_file(S16FS_t *fs, const inode_t *inode, const size_t position, const void *data, size_t nbyte) {
+    // Only overwriting data, no need to mess with allocation.
+    if (fs && inode && data) {
+        size_t first_block = position / BLOCK_SIZE;
+        size_t last_block  = (position + nbyte - 1) / BLOCK_SIZE;
+        // -1 becasue it'll go too for when it's on the boundary
+        dyn_array_t *block_list = get_blocks(fs, inode, first_block, last_block);
+        data_block_t data_block;
+        ssize_t data_written = 0;
+        block_ptr_t working_block;
+        bool success = true;
+        if (block_list) {
+            // potentially write partial block
+            if ((success = dyn_array_extract_front(block_list, &working_block))) {
+                unsigned offset = position & (BLOCK_SIZE - 1);
+                unsigned length = (dyn_array_empty(block_list) ? nbyte : BLOCK_SIZE - offset);
+                if ((success = back_store_read(fs->bs, working_block, &data_block))) {
+                    memcpy(data_block + offset, data, length);
+                    if ((success = back_store_write(fs->bs, working_block, &data_block))) {
+                        data = INCREMENT_VOID(data, length);
+                        data_written += length;
+                    }
+                }
+            }
+            // loop the middle
+            while (success && dyn_array_size(block_list) > 1
+                   && (success = dyn_array_extract_front(block_list, &working_block))) {
+                if ((success = back_store_write(fs->bs, working_block, data))) {
+                    data = INCREMENT_VOID(data, BLOCK_SIZE);
+                    data_written += BLOCK_SIZE;
+                }
+            }
+            // potentially write partial block, but always at front of block
+            if (success && dyn_array_size(block_list) == 1
+                && (success = dyn_array_extract_front(block_list, &working_block))) {
+                unsigned length = (position + nbyte) & (BLOCK_SIZE - 1);
+                if (length == 0) {
+                    length = 1024;
+                }
+                // I find it funny that it's really hard to tell the difference when you need to
+                // write 1024 or 0
+                // Thankfully, you can't be here if you're done writing.
+                if ((success = back_store_read(fs->bs, working_block, &data_block))) {
+                    memcpy(data_block, data, length);
+                    if ((success = back_store_write(fs->bs, working_block, &data_block))) {
+                        data = INCREMENT_VOID(data, length);
+                        data_written += length;
+                    }
+                }
+            }
+            dyn_array_destroy(block_list);
+            return data_written;
+        }
+    }
+    return -1;
+}
+
+dyn_array_t *get_blocks(const S16FS_t *fs, const inode_t *inode, const size_t first, const size_t last) {
+    if (inode && last < (DIRECT_TOTAL + INDIRECT_TOTAL + INDIRECT_TOTAL * INDIRECT_TOTAL)) {
+        dyn_array_t *results = dyn_array_create(last - first, sizeof(block_ptr_t), NULL);
+        size_t i             = first;
+        bool success         = true;
+        indir_block_t single_indir, dbl_indir;
+        for (; i < DIRECT_TOTAL && i <= last && success; ++i) {
+            success = dyn_array_push_back(results, &inode->data_ptrs[i]);
+        }
+        if (i <= last && i < (DIRECT_TOTAL + INDIRECT_TOTAL) && success
+            && (success = full_read(fs, &single_indir, inode->data_ptrs[6]))) {
+            for (size_t idx = (i - DIRECT_TOTAL); i < (DIRECT_TOTAL + INDIRECT_TOTAL) && i <= last && success;
+                 ++i, ++idx) {
+                success = dyn_array_push_back(results, single_indir.block_ptrs + idx);
+            }
+        }
+        if (i <= last && success && (success = full_read(fs, &dbl_indir, inode->data_ptrs[7]))) {
+            for (size_t dbl_idx = ((i - (DIRECT_TOTAL + INDIRECT_TOTAL)) / INDIRECT_TOTAL); i <= last && success;
+                 ++dbl_idx) {
+                success = full_read(fs, &single_indir, dbl_indir.block_ptrs[dbl_idx]);
+                for (size_t idx = ((i - (DIRECT_TOTAL + INDIRECT_TOTAL)) - (dbl_idx * INDIRECT_TOTAL));
+                     idx < INDIRECT_TOTAL && i <= last && success; ++i, ++idx) {
+                    success = dyn_array_push_back(results, single_indir.block_ptrs + idx);
+                }
+            }
+        }
+        return results;
+    }
+    return NULL;
+}
+
+ssize_t extend_file(S16FS_t *fs, inode_t *inode, inode_ptr_t inode_number, size_t new_len) {
+    if (inode) {
+        uint32_t current_size      = inode->mdata.size;
+        size_t cur_block_total     = (current_size / BLOCK_SIZE) + (current_size & (BLOCK_SIZE - 1) ? 1 : 0);
+        size_t new_block_count     = (new_len / BLOCK_SIZE) + (new_len & (BLOCK_SIZE - 1) ? 1 : 0);
+        indir_block_t single_indir = {{0}}, double_indir = {{0}};
+        if (cur_block_total == new_block_count) {
+            // Just stop. Now. Please.
+            return 0;
+        }
+        bool success = true;
+        block_ptr_t new_block;
+        // direct
+        if (cur_block_total < DIRECT_TOTAL) {
+            for (; cur_block_total < DIRECT_TOTAL && success && cur_block_total < new_block_count;) {
+                new_block = back_store_allocate(fs->bs);
+                if ((success = new_block != 0)) {
+                    inode->data_ptrs[cur_block_total] = new_block;
+                    ++cur_block_total;
+                }
+            }
+        }
+        // indirect
+        if (success && cur_block_total < new_block_count && cur_block_total < (DIRECT_TOTAL + INDIRECT_TOTAL)) {
+            if (inode->data_ptrs[6] == 0) {
+                // need to allocate indirect
+                new_block = back_store_allocate(fs->bs);
+                if ((success = new_block != 0)) {
+                    inode->data_ptrs[6] = new_block;
+                }
+            } else {
+                success = back_store_read(fs->bs, inode->data_ptrs[6], &single_indir);
+            }
+            if (success) {
+                for (size_t i = cur_block_total - DIRECT_TOTAL;
+                     i < INDIRECT_TOTAL && success && cur_block_total < new_block_count; ++i) {
+                    new_block = back_store_allocate(fs->bs);
+                    if ((success = new_block != 0)) {
+                        single_indir.block_ptrs[i] = new_block;
+                        ++cur_block_total;
+                    }
+                }
+                // write indir back
+                success = back_store_write(fs->bs, inode->data_ptrs[6], &single_indir);
+            }
+        }
+        // dbl
+        if (success && cur_block_total < new_block_count) {
+            if (inode->data_ptrs[7] == 0) {
+                new_block = back_store_allocate(fs->bs);
+                if ((success = new_block != 0)) {
+                    inode->data_ptrs[7] = new_block;
+                }
+            } else {
+                success = back_store_read(fs->bs, inode->data_ptrs[7], &double_indir);
+            }
+            for (size_t dbl_idx = (cur_block_total - DIRECT_TOTAL - INDIRECT_TOTAL) / INDIRECT_TOTAL;
+                 cur_block_total < new_block_count && success && dbl_idx < INDIRECT_TOTAL; ++dbl_idx) {
+                if (double_indir.block_ptrs[dbl_idx] == 0) {
+                    new_block = back_store_allocate(fs->bs);
+                    if ((success = new_block != 0)) {
+                        double_indir.block_ptrs[dbl_idx] = new_block;
+                        memset(&single_indir, 0x00, sizeof(indir_block_t));
+                    }
+                } else {
+                    success = back_store_read(fs->bs, double_indir.block_ptrs[dbl_idx], &single_indir);
+                }
+                for (size_t idx = (cur_block_total - DIRECT_TOTAL - INDIRECT_TOTAL) & (INDIRECT_TOTAL - 1);
+                     cur_block_total < new_block_count && success && idx < INDIRECT_TOTAL; ++idx) {
+                    new_block = back_store_allocate(fs->bs);
+                    if ((success = new_block != 0)) {
+                        single_indir.block_ptrs[idx] = new_block;
+                        ++cur_block_total;
+                    }
+                }
+                success = back_store_write(fs->bs, double_indir.block_ptrs[dbl_idx], &single_indir);
+            }
+            success = back_store_write(fs->bs, inode->data_ptrs[7], &double_indir);
+        }
+        // flush inode and return
+        inode->mdata.size = (new_block_count == cur_block_total ? new_len : (cur_block_total * BLOCK_SIZE));
+        return write_inode(fs, inode, inode_number) ? inode->mdata.size : -1;
+    }
+    return -1;
+}
+
+void release_fds(S16FS_t *fs, int inode_number) {
+    if (fs) {
+        for(size_t i = 0; i < DESCRIPTOR_MAX; ++i){
+            // Oh god 256 if statements. I am so sorry.
+            if (fs->fd_table.fd_inode[i] == inode_number) {
+                fs->fd_table.fd_inode[i] = 0;
+                bitmap_reset(fs->fd_table.fd_status,i);
+            }
+        }
+    }
 }

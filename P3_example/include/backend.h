@@ -153,11 +153,14 @@ typedef struct {
     block_ptr_t block;
     file_t type;
     uint64_t total;
+    uint64_t pos;
     void *data;
 } result_t;
 
+typedef enum { OVERWRITE = 0x01, EXTEND = 0x02, MIXED = 0x03 } write_mode_t;
+
 #define GET_WRITE_MODE(file_size, position, nbytes) \
-    (((position) < (file_size)) ? ((((positon) + (nbytes)) <= file_size) ? OVERWRITE : MIXED) : EXTEND)
+    (((position) < (file_size)) ? ((((position) + (nbytes)) <= file_size) ? OVERWRITE : MIXED) : EXTEND)
 
 #ifdef DEBUG
 
@@ -191,5 +194,19 @@ void scan_directory(const S16FS_t *const fs, const char *fname, const inode_ptr_
 inode_ptr_t find_free_inode(const S16FS_t *const fs);
 
 S16FS_t *ready_file(const char *path, const bool format);
+
+bool wipe_parent_entry(S16FS_t *const fs, const char *fname, const inode_ptr_t parent_id);
+bool release_regular(S16FS_t *fs, const char *fname, const inode_ptr_t target_number, const inode_ptr_t parent_number);
+bool release_dir(S16FS_t *fs, const char *fname, const inode_ptr_t target_number, const inode_ptr_t parent_number,
+                 const block_ptr_t block_number);
+
+bool fd_valid(const S16FS_t *const fs, int fd);
+
+ssize_t overwrite_file(S16FS_t *fs, const inode_t *inode, const size_t position, const void *data, size_t nbyte);
+ssize_t extend_file(S16FS_t *fs, inode_t *inode, inode_ptr_t inode_number, size_t new_len);
+
+dyn_array_t *get_blocks(const S16FS_t *fs, const inode_t *inode, const size_t first, const size_t last);
+
+void release_fds(S16FS_t *fs, int inode_number);
 
 #endif
