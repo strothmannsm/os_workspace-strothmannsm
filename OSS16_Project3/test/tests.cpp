@@ -18,63 +18,21 @@ class GradeEnvironment : public testing::Environment {
   public:
     virtual void SetUp() {
         score = 0;
-        max   = 110;
+        max   = 80;
     }
     virtual void TearDown() { std::cout << "SCORE: " << score << " (out of " << max << ")" << std::endl; }
 };
 
-/*
-
-    int fs_get_dir(const S16FS_t *const fs, const char *const fname, dir_rec_t *const records)
-    1. Normal, root I guess?
-    2. Normal, subdir somewhere
-    3. Normal, empty dir
-    4. Error, empty fname
-    5. Error, NULL fname
-    6. Error, NULL fs
-    7. Error, NULL records
-    8. Error, not a directory
-
-    ssize_t fs_read_file(S16FS_t *const fs, const int fd, void *data, size_t nbyte);
-    1. Normal, subdir, begin to < 1 block
-    2. Normal, subdir, < 1 block to part of next
-    3. Normal, subdir, whole block
-    4. Normal, subdir, multiple blocks
-    5. Normal, subdir, direct->indirect transition
-    6. Normal, subdir, indirect->dbl_indirect transition
-    7. Error, NULL fs
-    8. Error, NULL data
-    9. Error, nbyte 0 (not an error?)
-    10. Error, at EOF (not an error?)
-
-    int fs_move_file(S16FS_t *const fs, const char *const fname_src, const char *const fname_dst);
-    1. Normal, file, root to another place in root
-    2. Normal, file, one dir to another (attempt to use already opened descriptor after move - DESCRIPTOR ONLY)
-    3. Normal, directory
-    4. Normal, Rename of file where the directory is full
-    5. Error, dst exists
-    6. Error, dst parent does not exist
-    7. Error, dst parent full
-    8. Error, src does not exist
-    9. ?????, src = dst
-    10. Error, FS null
-    11. Error, src null
-    12. Error, src empty
-    13. Error, src is root
-    14. Error, dst NULL
-    15. Error, dst empty
-    16. Error, dst root?
-    Directory into itself
-
-    int fs_seek_file(S16FS_t *const fs, const int fd, const off_t offset, const seek_t whence)
-    1. Normal, wherever, really - make sure it doesn't change a second fd to the file
-    2. ?????, seek past beginning - resulting location unspecified by our api, can't really test?
-    3. ?????, seek past end - resulting location unspecified by our api, can't really test?
-    4. Error, FS null
-    5. Error, fd invalid
-    6. Error, whence not a valid value
-
-*/
+bool find_in_directory(const dyn_array_t *const record_arr, const char *fname) {
+    if (record_arr && fname) {
+        for (size_t i = 0; i < dyn_array_size(record_arr); ++i) {
+            if (strncmp(((file_record_t *) dyn_array_at(record_arr, i))->name, fname, FS_FNAME_MAX) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 /*
 
@@ -130,7 +88,7 @@ TEST(a_tests, format_mount_unmount) {
     // Which, obviously, would cause issues
     ASSERT_EQ(fs_mount(""), nullptr);
 
-    score += 5;
+    score += 1;
 }
 
 /*
@@ -239,7 +197,7 @@ TEST(b_tests, file_creation_one) {
 
     fs_unmount(fs);
 
-    score += 5;
+    score += 1;
 }
 
 TEST(b_tests, file_creation_two) {
@@ -316,7 +274,7 @@ TEST(b_tests, file_creation_two) {
     fs_unmount(fs);
 
     // ... Can't really test 21 yet.
-    score += 5;
+    score += 1;
 }
 
 
@@ -439,7 +397,7 @@ TEST(c_tests, open_close_file) {
 
     fs_unmount(fs);
 
-    score += 20;
+    score += 1;
 }
 
 /*
@@ -531,8 +489,6 @@ TEST(d_tests, write_file_simple) {
     ASSERT_EQ(fs_write(fs, fd_array[2], three_a, 334), 334);
     // file is a block of 0x11, 333 0x33 and one 0xAA
 
-    score += 15;
-
     // I'll do the breakage tests now, move the big writes somewhere else
     // 2. Normal, attempt to use after closing, assert failure **
     // 3. Normal, multiple opens, close does not affect the others **
@@ -568,7 +524,7 @@ TEST(d_tests, write_file_simple) {
     // And I'm going to unmount without closing.
 
     fs_unmount(fs);
-    score += 15;
+    score += 1;
 }
 
 TEST(d_tests, write_file_fill) {
@@ -607,7 +563,6 @@ TEST(d_tests, write_file_fill) {
     blocks += 3;
     // 3 bceause we just ate up an indirect block
 
-    score += 5;
 
     // FS_WRITE 7
     // Ok, now we need to wriiiiittteeeeeeee......... 510?
@@ -625,7 +580,7 @@ TEST(d_tests, write_file_fill) {
     // There are 65495 at start, so 65495 - 519... 64976 to write.
     // UGH. Wolfram says 64976 is 2^4 * 31 * 131
     // Which is 16 iterations of a write of size 4061 blocks
-    score += 5;
+
     // HAHA, GOTCHA! Actually it's much more complicated and I spent an hour+ debugging before I remembered that
     // Total data (actual data) in a file is... I can never remember the equation
     // 65536 - 41 - 6 - 1 - 512 - 1 = 64975
@@ -664,7 +619,7 @@ TEST(d_tests, write_file_fill) {
 
     fs_unmount(fs);
 
-    score += 10;
+    score += 1;
 }
 
 /*
@@ -721,8 +676,6 @@ TEST(e_tests, remove_file) {
 
     fs_unmount(fs);
 
-    score += 10;
-
 
     fs = fs_mount(test_fname[0]);
     ASSERT_NE(fs, nullptr);
@@ -747,8 +700,428 @@ TEST(e_tests, remove_file) {
 
     fs_unmount(fs);
 
+    score += 1;
+}
+
+/*
+    int fs_get_dir(const S16FS_t *const fs, const char *const fname, dir_rec_t *const records)
+    1. Normal, root I guess?
+    2. Normal, subdir somewhere
+    3. Normal, empty dir
+    4. Error, bad path
+    5. Error, NULL fname
+    6. Error, NULL fs
+    7. Error, not a directory
+*/
+TEST(f_tests, get_dir) {
+    vector<const char *> fnames{
+        "/file", "/folder", "/folder/with_file", "/folder/with_folder", "/DOESNOTEXIST", "/file/BAD_REQUEST",
+        "/DOESNOTEXIST/with_file", "/folder/with_file/bad_req", "folder/missing_slash", "/folder/new_folder/",
+        "/folder/withwaytoolongfilenamethattakesupmorespacethanitshould and yet was not enough so I had to add "
+        "more/bad_req",
+        "/folder/withfilethatiswayyyyytoolongwhydoyoumakefilesthataretoobigEXACT!", "/", "/mystery_file"};
+
+    const char *test_fname = "f_tests.s16fs";
+
+    ASSERT_EQ(system("cp c_tests.s16fs f_tests.s16fs"), 0);
+
+    S16FS_t *fs = fs_mount(test_fname);
+    ASSERT_NE(fs, nullptr);
+
+    // FS_GET_DIR 1
+    dyn_array_t *record_results = fs_get_dir(fs, "/");
+    ASSERT_NE(record_results, nullptr);
+
+    ASSERT_TRUE(find_in_directory(record_results, "file"));
+    ASSERT_TRUE(find_in_directory(record_results, "folder"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+
+    dyn_array_destroy(record_results);
+
+    // FS_GET_DIR 2
+    record_results = fs_get_dir(fs, fnames[1]);
+    ASSERT_NE(record_results, nullptr);
+
+    ASSERT_TRUE(find_in_directory(record_results, "with_file"));
+    ASSERT_TRUE(find_in_directory(record_results, "with_folder"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+
+    dyn_array_destroy(record_results);
+
+    // FS_GET_DIR 3
+    record_results = fs_get_dir(fs, fnames[3]);
+    ASSERT_NE(record_results, nullptr);
+
+    ASSERT_EQ(dyn_array_size(record_results), 0);
+
+    dyn_array_destroy(record_results);
+
+    // FS_GET_DIR 4
+    record_results = fs_get_dir(fs, fnames[9]);
+    ASSERT_EQ(record_results, nullptr);
+
+    // FS_GET_DIR 5
+    record_results = fs_get_dir(fs, NULL);
+    ASSERT_EQ(record_results, nullptr);
+
+    // FS_GET_DIR 6
+    record_results = fs_get_dir(NULL, fnames[3]);
+    ASSERT_EQ(record_results, nullptr);
+
+    // FS_GET_DIR 7
+    record_results = fs_get_dir(fs, fnames[0]);
+    ASSERT_EQ(record_results, nullptr);
+
+    score += 25;
+}
+
+/*
+    off_t fs_seek(S16FS_t *fs, int fd, off_t offset, seek_t whence)
+    1. Normal, wherever, really - make sure it doesn't change a second fd to the file
+    2. Normal, seek past beginning - resulting location unspecified by our api, can't really test?
+    3. Normal, seek past end - resulting location unspecified by our api, can't really test?
+    4. Error, FS null
+    5. Error, fd invalid
+    6. Error, whence not a valid value
+*/
+
+TEST(g_tests, seek) {
+    vector<const char *> fnames{"/file_a", "/file_b", "/file_c", "/file_d"};
+
+    const char *test_fname = "g_tests.s16fs";
+
+    ASSERT_EQ(system("cp d_tests_full.s16fs g_tests.s16fs"), 0);
+
+    S16FS_t *fs = fs_mount(test_fname);
+    ASSERT_NE(fs, nullptr);
+
+    int fd_one = fs_open(fs, fnames[0]);
+    ASSERT_GE(fd_one, 0);
+
+    int fd_two = fs_open(fs, fnames[0]);
+    ASSERT_GE(fd_two, 0);
+
+    // While we're at it, make sure they default to 0
+
+    int position = fs_seek(fs, fd_one, 0, FS_SEEK_CUR);
+    ASSERT_EQ(position, 0);
+
+    // FS_SEEK 1
+    position = fs_seek(fs, fd_one, 1023, FS_SEEK_CUR);
+    ASSERT_EQ(position, 1023);
+
+    position = fs_seek(fs, fd_one, 12, FS_SEEK_SET);
+    ASSERT_EQ(position, 12);
+
+    // FS_SEEK 2
+    position = fs_seek(fs, fd_one, -50, FS_SEEK_CUR);
+    ASSERT_EQ(position, 0);
+
+    // FS_SEEK 3
+    position = fs_seek(fs, fd_one, 98675309, FS_SEEK_CUR);
+    ASSERT_EQ(position, 66934784);
+
+    // while we're at it, make sure seek didn't break the other one
+    position = fs_seek(fs, fd_two, 0, FS_SEEK_CUR);
+    ASSERT_EQ(position, 0);
+
+    // FS_SEEK 4
+    position = fs_seek(NULL, fd_one, 12, FS_SEEK_SET);
+    ASSERT_LT(position, 0);
+
+    // FS_SEEK 5
+    position = fs_seek(fs, 98, 12, FS_SEEK_SET);
+    ASSERT_LT(position, 0);
+
+    // FS_SEEK 6
+    position = fs_seek(fs, fd_one, 12, (seek_t) 8458);
+    ASSERT_LT(position, 0);
+
+    score += 13;
+}
+
+/*
+    ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte);
+    1. Normal, begin to < 1 block
+    2. Normal, < 1 block to part of next
+    3. Normal, whole block
+    4. Normal, multiple blocks
+    5. Normal, direct->indirect transition
+    6. Normal, indirect->dbl_indirect transition
+    7. Normal, double indirect indirect transition
+    8. Error, NULL fs
+    9. Error, NULL data
+    10. Normal, nbyte 0
+    11. Normal, at EOF
+*/
+
+TEST(h_tests, read) {
+    vector<const char *> fnames{"/file_a", "/file_b", "/file_c", "/file_d"};
+
+    const char *test_fname = "g_tests.s16fs";
+
+    ASSERT_EQ(system("cp d_tests_full.s16fs g_tests.s16fs"), 0);
+
+    uint8_t six_e[3072];
+    memset(six_e, 0x6E, 3072);
+    uint8_t large_eight_five_b_seven[1024 * 3];
+    memset(large_eight_five_b_seven, 0x88, 888);
+    memset(large_eight_five_b_seven + 888, 0x55, 555);
+    memset(large_eight_five_b_seven + 555 + 888, 0xBB, 1111);
+    memset(large_eight_five_b_seven + 555 + 1111 + 888, 0x77, 518);
+
+    S16FS_t *fs = fs_mount(test_fname);
+    ASSERT_NE(fs, nullptr);
+
+    int fd = fs_open(fs, fnames[0]);
+    ASSERT_GE(fd, 0);
+
+    uint8_t write_space[4096] = {0};
+
+    // FS_READ 1
+    ssize_t nbyte = fs_read(fs, fd, &write_space, 889);
+    ASSERT_EQ(nbyte, 889);
+    ASSERT_EQ(memcmp(write_space, large_eight_five_b_seven, 889), 0);
+
+    // FS_READ 2
+    nbyte = fs_read(fs, fd, &write_space, 560);
+    ASSERT_EQ(nbyte, 560);
+    ASSERT_EQ(memcmp(write_space, large_eight_five_b_seven + 889, 560), 0);
+
+    // FS_READ 3
+    ASSERT_EQ(fs_seek(fs, fd, 0, FS_SEEK_SET), 0);
+    nbyte = fs_read(fs, fd, &write_space, 1024);
+    ASSERT_EQ(nbyte, 1024);
+    ASSERT_EQ(memcmp(write_space, large_eight_five_b_seven, 1024), 0);
+
+    // FS_READ 4
+    nbyte = fs_read(fs, fd, &write_space, 2048);
+    ASSERT_EQ(nbyte, 2048);
+    ASSERT_EQ(memcmp(write_space, large_eight_five_b_seven + 1024, 2048), 0);
+
+    // FS_READ 5
+    ASSERT_EQ(fs_seek(fs, fd, 5120, FS_SEEK_SET), 5120);
+    nbyte = fs_read(fs, fd, &write_space, 2048);
+    ASSERT_EQ(nbyte, 2048);
+    ASSERT_EQ(memcmp(write_space, large_eight_five_b_seven, 2048), 0);
+    // Aww yeah, my read hasn't broken yet while writing tests
+
+    // FS_READ 6
+    ASSERT_EQ(fs_seek(fs, fd, (511 + 6) * 1024, FS_SEEK_SET), (511 + 6) * 1024);
+    nbyte = fs_read(fs, fd, &write_space, 2048);
+    ASSERT_EQ(nbyte, 2048);
+    // Spoke too soon
+    // Duh, checked against the wrong result data.
+    ASSERT_EQ(memcmp(write_space, large_eight_five_b_seven, 2048), 0);
+
+    score += 15;
+
+    // FS_READ 7
+    ASSERT_EQ(fs_seek(fs, fd, (512 * 10 + 511 + 6) * 1024, FS_SEEK_SET), (512 * 10 + 511 + 6) * 1024);
+    nbyte = fs_read(fs, fd, &write_space, 2048);
+    ASSERT_EQ(nbyte, 2048);
+    ASSERT_EQ(memcmp(write_space, six_e, 2048), 0);
+
+    // FS_READ 8
+    nbyte = fs_read(NULL, fd, write_space, 1024);
+    ASSERT_LT(nbyte, 0);
+    // did you break the descriptor position?
+    ASSERT_EQ(fs_seek(fs, fd, 0, FS_SEEK_CUR), (512 * 10 + 511 + 6) * 1024 + 2048);
+
+    // FS_READ 9
+    nbyte = fs_read(fs, fd, NULL, 1024);
+    ASSERT_LT(nbyte, 0);
+    // did you break the descriptor position?
+    ASSERT_EQ(fs_seek(fs, fd, 0, FS_SEEK_CUR), (512 * 10 + 511 + 6) * 1024 + 2048);
+
+    // FS_READ 10
+    nbyte = fs_read(fs, fd, write_space, 0);
+    ASSERT_EQ(nbyte, 0);
+    ASSERT_EQ(fs_seek(fs, fd, 0, FS_SEEK_CUR), (512 * 10 + 511 + 6) * 1024 + 2048);
+
+    // FS_READ 11
+    ASSERT_EQ(fs_seek(fs, fd, 98675309, FS_SEEK_CUR), 66934784);
+    ASSERT_EQ(fs_seek(fs, fd, -500, FS_SEEK_END), 66934284);
+    nbyte = fs_read(fs, fd, write_space, 1024);
+    ASSERT_EQ(nbyte, 500);
+    ASSERT_EQ(memcmp(write_space, six_e, 500), 0);
+    // did you mess up the position?
+    ASSERT_EQ(fs_seek(fs, fd, 0, FS_SEEK_CUR), 66934784);
+
+    score += 20;
+}
+
+// 80 points left, 10 for valgrind
+
+#ifdef ENABLE_MOVE
+
+
+/*
+    int fs_move(S16FS_t *fs, const char *src, const char *dst);
+    1. Normal, file, one dir to another (check descriptor)
+    2. Normal, directory
+    3. Normal, Rename of file where the directory is full
+    4. Error, dst exists
+    5. Error, dst parent does not exist
+    6. Error, dst parent full
+    7. Error, src does not exist
+    8. ?????, src = dst
+    9. Error, FS null
+    10. Error, src null
+    11. Error, src is root
+    12. Error, dst NULL
+    13. Error, dst root?
+    14. Error, Directory into itself
+*/
+
+TEST(g_tests, move) {
+    vector<const char *> fnames{
+        "/file", "/folder", "/folder/with_file", "/folder/with_folder", "/DOESNOTEXIST", "/file/BAD_REQUEST",
+        "/DOESNOTEXIST/with_file", "/folder/with_file/bad_req", "folder/missing_slash", "/folder/new_folder/",
+        "/folder/withwaytoolongfilenamethattakesupmorespacethanitshould and yet was not enough so I had to add "
+        "more/bad_req",
+        "/folder/withfilethatiswayyyyytoolongwhydoyoumakefilesthataretoobigEXACT!", "/", "/mystery_file"};
+
+    const char *test_fname = "g_tests.s16fs";
+
+    ASSERT_EQ(system("cp c_tests.s16fs g_tests.s16fs"), 0);
+
+    S16FS_t *fs = fs_mount(test_fname);
+
+    ASSERT_NE(fs, nullptr);
+
+    int fd = fs_open(fs, fnames[0]);
+
+    // FS_MOVE 1
+    dyn_array_t *record_results = NULL;
+    ASSERT_EQ(fs_move(fs, fnames[0], "/folder/new_location"), 0);
+
+    record_results = fs_get_dir(fs, fnames[1]);
+    ASSERT_NE(record_results, nullptr);
+
+    ASSERT_TRUE(find_in_directory(record_results, "with_file"));
+    ASSERT_TRUE(find_in_directory(record_results, "with_folder"));
+    ASSERT_TRUE(find_in_directory(record_results, "new_location"));
+    ASSERT_EQ(dyn_array_size(record_results), 3);
+    dyn_array_destroy(record_results);
+
+    record_results = fs_get_dir(fs, "/");
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "folder"));
+    ASSERT_EQ(dyn_array_size(record_results), 1);
+    dyn_array_destroy(record_results);
+
+
+    // Descriptor still functional?
+    ASSERT_EQ(fs_write(fs, fd, test_fname, 14), 14);
+
+    // FS_MOVE 2
+    ASSERT_EQ(fs_move(fs, fnames[3], "/with_folder"), 0);
+    record_results = fs_get_dir(fs, "/");
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "folder"));
+    ASSERT_TRUE(find_in_directory(record_results, "with_folder"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    record_results = fs_get_dir(fs, fnames[1]);
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "with_file"));
+    ASSERT_TRUE(find_in_directory(record_results, "new_location"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    // FS_MOVE 4
+    ASSERT_LT(fs_move(fs, "/folder/new_location", fnames[1]), 0);
+
+    record_results = fs_get_dir(fs, "/");
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "folder"));
+    ASSERT_TRUE(find_in_directory(record_results, "with_folder"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    record_results = fs_get_dir(fs, fnames[1]);
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "with_file"));
+    ASSERT_TRUE(find_in_directory(record_results, "new_location"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    // FS_MOVE 5
+    ASSERT_LT(fs_move(fs, "/folder/new_location", "/folder/noooope/new_location"), 0);
+
+    record_results = fs_get_dir(fs, "/");
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "folder"));
+    ASSERT_TRUE(find_in_directory(record_results, "with_folder"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    record_results = fs_get_dir(fs, fnames[1]);
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "with_file"));
+    ASSERT_TRUE(find_in_directory(record_results, "new_location"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    // FS_MOVE 7
+    ASSERT_LT(fs_move(fs, "/folder/DNE", "/folder/also_DNE"), 0);
+
+    record_results = fs_get_dir(fs, "/");
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "folder"));
+    ASSERT_TRUE(find_in_directory(record_results, "with_folder"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    record_results = fs_get_dir(fs, fnames[1]);
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "with_file"));
+    ASSERT_TRUE(find_in_directory(record_results, "new_location"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    // FS_MOVE 8
+    // this one is just weird, so... skipping
+
+    // FS_MOVE 9
+    ASSERT_LT(fs_move(NULL, "/folder/DNE", "/folder/also_DNE"), 0);
+
+    // FS_MOVE 10
+    ASSERT_LT(fs_move(fs, NULL, "/folder/also_DNE"), 0);
+
+    // FS_MOVE 11
+    ASSERT_LT(fs_move(fs, "/", "/folder/root_maybe"), 0);
+
+    // FS_MOVE 12
+    ASSERT_LT(fs_move(fs, "/folder/new_location", NULL), 0);
+
+    // FS_MOVE 13
+    ASSERT_LT(fs_move(fs, "/folder/new_location", "/"), 0);
+
+    // FS_MOVE 14
+    ASSERT_LT(fs_move(fs,"/folder","/folder/oh_no"),0)
+
+
+    // Things still working after all that ?
+    record_results = fs_get_dir(fs, "/");
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "folder"));
+    ASSERT_TRUE(find_in_directory(record_results, "with_folder"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
+    record_results = fs_get_dir(fs, fnames[1]);
+    ASSERT_NE(record_results, nullptr);
+    ASSERT_TRUE(find_in_directory(record_results, "with_file"));
+    ASSERT_TRUE(find_in_directory(record_results, "new_location"));
+    ASSERT_EQ(dyn_array_size(record_results), 2);
+    dyn_array_destroy(record_results);
+
     score += 15;
 }
+#endif
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
