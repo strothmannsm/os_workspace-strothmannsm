@@ -772,6 +772,8 @@ TEST(f_tests, get_dir) {
     record_results = fs_get_dir(fs, fnames[0]);
     ASSERT_EQ(record_results, nullptr);
 
+    fs_unmount(fs);
+
     score += 25;
 }
 
@@ -836,6 +838,8 @@ TEST(g_tests, seek) {
     // FS_SEEK 6
     position = fs_seek(fs, fd_one, 12, (seek_t) 8458);
     ASSERT_LT(position, 0);
+
+    fs_unmount(fs);
 
     score += 13;
 }
@@ -948,6 +952,8 @@ TEST(h_tests, read) {
     // did you mess up the position?
     ASSERT_EQ(fs_seek(fs, fd, 0, FS_SEEK_CUR), 66934784);
 
+    fs_unmount(fs);
+
     score += 20;
 }
 
@@ -974,7 +980,7 @@ TEST(h_tests, read) {
     14. Error, Directory into itself
 */
 
-TEST(g_tests, move) {
+TEST(i_tests, move) {
     vector<const char *> fnames{
         "/file", "/folder", "/folder/with_file", "/folder/with_folder", "/DOESNOTEXIST", "/file/BAD_REQUEST",
         "/DOESNOTEXIST/with_file", "/folder/with_file/bad_req", "folder/missing_slash", "/folder/new_folder/",
@@ -1101,7 +1107,7 @@ TEST(g_tests, move) {
     ASSERT_LT(fs_move(fs, "/folder/new_location", "/"), 0);
 
     // FS_MOVE 14
-    ASSERT_LT(fs_move(fs,"/folder","/folder/oh_no"),0)
+    ASSERT_LT(fs_move(fs,"/folder","/folder/oh_no"),0);
 
 
     // Things still working after all that ?
@@ -1118,6 +1124,8 @@ TEST(g_tests, move) {
     ASSERT_TRUE(find_in_directory(record_results, "new_location"));
     ASSERT_EQ(dyn_array_size(record_results), 2);
     dyn_array_destroy(record_results);
+
+    fs_unmount(fs);
 
     score += 15;
 }
