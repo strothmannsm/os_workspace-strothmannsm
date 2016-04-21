@@ -958,7 +958,7 @@ TEST(h_tests, read) {
 }
 
 // 80 points left, 10 for valgrind
-
+#define ENABLE_MOVE 1
 #ifdef ENABLE_MOVE
 
 

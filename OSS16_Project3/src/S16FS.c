@@ -516,9 +516,10 @@ off_t fs_seek(S16FS_t *fs, int fd, off_t offset, seek_t whence) {
                     position += offset;
                     break;
                 case FS_SEEK_END: //set position to EOF
-                    position = eof;
+                    position = eof + offset;
                     break;
                 default:
+                    return -1;
                     break;
             }
 
@@ -569,8 +570,8 @@ ssize_t fs_read(S16FS_t *fs, int fd, void *dst, size_t nbyte) {
 
             //cut up limit into chunks for logical block, full blocks, and last block
             size_t log_block_readable = BLOCK_SIZE - log_block_offset; //bytes left in logical block
-            size_t full_block_readable; //number of full blocks to write
-            size_t last_block_readable; //number of leftover bytes to write after logical block and full blocks
+            size_t full_block_readable; //number of full blocks to read
+            size_t last_block_readable; //number of leftover bytes to read after logical block and full blocks
 
             //if limit is bigger than what's available in the first logical block
             if(limit > log_block_readable) {
@@ -689,57 +690,89 @@ dyn_array_t *fs_get_dir(S16FS_t *fs, const char *path) {
 ///
 int fs_move(S16FS_t *fs, const char *src, const char *dst) {
     if(fs && src && dst) {
-        //find the file to move and the directory to move it to
+        //find the file to move and make sure the dst file doesn't already exist
         result_t source_status;
         result_t destination_status;
         locate_file(fs, src, &source_status);
         locate_file(fs, dst, &destination_status);
-        if(source_status.success && source_status.found && 
-            destination_status.success && destination_status.found && destination_status.type == FS_DIRECTORY) {
+        if(source_status.success && source_status.found && source_status.inode != 0 && 
+            destination_status.success && !destination_status.found) {
 
-            //found the file and the destination directory now get all the inodes we need
-            inode_t f_inode; //src file inode
-            inode_t parent_inode; //src file parent inode
-            inode_t dst_inode; //destination directory inode
-            if(read_inode(fs, &f_inode, source_status.inode) && read_inode(fs, &parent_inode, source_status.parent) &&
-                read_inode(fs, &dst_inode, destination_status.inode)) {
+            //found the src file and the dst file doesn't already exist, chop the dst_fname off of dst
+            //get the length of dst
+            size_t dst_len = strnlen(dst, FS_PATH_MAX);
+            if(dst_len != 0 && dst[0] == '/' && dst_len < FS_PATH_MAX) {
+                //dst path is good
 
-                //have all the inodes, now get parent and destination directory blocks
-                dir_block_t parent_block;
-                dir_block_t destination_block;
-                if(full_read(fs, &parent_block, parent_inode.data_ptrs[0]) && 
-                    full_read(fs, &destination_block, dst_inode.data_ptrs[0]) && 
-                    destination_block.mdata.size < DIR_REC_MAX) {
+                //have to copy dst to mess with it
+                char *dst_copy, *dst_fname;
+                dst_copy = (char*)calloc(1, dst_len + 2); //+1 for null terminator and an extra for breaking up
+                memcpy(dst_copy, dst, dst_len); //and do the copy
+                //point to last / in dst_copy: dst_fname is everything past this
+                dst_fname = strrchr(dst_copy, '/');
+                ++dst_fname; //move forward one
+                size_t fname_len = dst_len - (dst_fname - dst_copy); //get the length of the fname
+                memmove(dst_fname + 1, dst_fname, fname_len + 1); //shift dst_fname down 1 space
+                dst_fname[0] = '\0'; //insert null terminator to terminate destination directory before dst_fname
+                ++dst_fname; //move the pointer to point to the actual fname
+                //dst_fname points inside dst_copy.. two strings in one.. yay!
 
-                    //add to destination_block and remove from parent_block
-                    for(int i = 0; i < DIR_REC_MAX; i++) {
-                        //find available entry in destination and set
-                        if(destination_block.entries[i].fname[0] == '\0') {
-                            memcpy(destination_block.entries[i].fname, f_inode.fname, FS_FNAME_MAX);
-                            destination_block.entries[i].inode = source_status.inode;
-                            ++destination_block.mdata.size;
-                        }
-                        //find entry in parent and unset
-                        if(parent_block.entries[i].inode == source_status.inode) {
-                            parent_block.entries[i].fname[0] = '\0';
-                            parent_block.entries[i].inode = 0;
-                            --parent_block.mdata.size;
-                        }
-                    }
+                //now we need to locate the destination directory
+                locate_file(fs, dst_copy, &destination_status);
+                if(destination_status.success && destination_status.found && destination_status.type == FS_DIRECTORY && 
+                    destination_status.inode != source_status.inode) {
 
-                    //update inode so it knows its new mommy
-                    f_inode.mdata.parent = destination_status.inode;
+                    //get all the inodes we need
+                    inode_t f_inode; //src file inode
+                    inode_t parent_inode; //src file parent inode
+                    inode_t dst_inode; //destination directory inode
+                    if(read_inode(fs, &f_inode, source_status.inode) && read_inode(fs, &parent_inode, source_status.parent) &&
+                        read_inode(fs, &dst_inode, destination_status.inode)) {
 
-                    //write f_inode, parent_block and destination_block
-                    if(write_inode(fs, &f_inode, source_status.inode) && 
-                        full_write(fs, &parent_block, parent_inode.data_ptrs[0]) && 
-                        full_write(fs, &destination_block, dst_inode.data_ptrs[0])) {
+                        //have all the inodes, now get parent and destination directory blocks
+                        dir_block_t parent_block;
+                        dir_block_t destination_block;
+                        if(full_read(fs, &parent_block, parent_inode.data_ptrs[0]) && 
+                            full_read(fs, &destination_block, dst_inode.data_ptrs[0]) && 
+                            destination_block.mdata.size < DIR_REC_MAX) {
 
-                        return 0;
-                    } //else failed to write src inode or directory blocks back out
-                } //else failed to read parent or destination directory block or destination is full
-            } //else failed to read src, src parent or destination inode
-        } //else failed to find src file or dst directory
+                            bool dstupdate = false;
+                            bool parentupdate = false;
+                            //add to destination_block and remove from parent_block
+                            for(int i = 0; i < DIR_REC_MAX; i++) {
+                                //find available entry in destination and set
+                                if(destination_block.entries[i].inode == 0 && !dstupdate) {
+                                    memcpy(destination_block.entries[i].fname, dst_fname, fname_len);
+                                    destination_block.entries[i].inode = source_status.inode;
+                                    ++destination_block.mdata.size;
+                                    dstupdate = true;
+                                }
+                                //find entry in parent and unset
+                                if(parent_block.entries[i].inode == source_status.inode && !parentupdate) {
+                                    parent_block.entries[i].fname[0] = '\0';
+                                    parent_block.entries[i].inode = 0;
+                                    --parent_block.mdata.size;
+                                    parentupdate = true;
+                                }
+                            }
+
+                            //update inode so it knows its new mommy
+                            f_inode.mdata.parent = destination_status.parent;
+
+                            //write f_inode, parent_block and destination_block
+                            if(write_inode(fs, &f_inode, source_status.inode) && 
+                                full_write(fs, &parent_block, parent_inode.data_ptrs[0]) && 
+                                full_write(fs, &destination_block, dst_inode.data_ptrs[0])) {
+                                //oh crap better free that stupid copy.. lest ye be leaking memory
+                                free(dst_copy);
+                                return 0;
+                            } //else failed to write src inode or directory blocks back out
+                        } //else failed to read parent or destination directory block OR destination is full
+                    } //else failed to read src, src parent or destination directory inode
+                } //else failed to find destination directory OR destination is same as src (trying to move file into itself)
+                free(dst_copy); //better free copy here too in case it got created but something else went wrong
+            } //else dst path is probably no good
+        } //else failed to find src file OR dst file already exists OR trying to move root.. stop that
     } //else bad parameter
     return -1;
 }
