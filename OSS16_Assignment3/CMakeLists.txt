@@ -4,4 +4,4 @@ set(CMAKE_C_FLAGS "-std=c99 -Wall -Wextra -Wshadow -Werror -g -D_XOPEN_SOURCE=50
 
 add_executable(producer-consumer src/producer_consumer.c)
 
-target_link_libraries(producer-consumer rt)
+target_link_libraries(producer-consumer rt pthread)
