@@ -100,6 +100,7 @@ int main(void) {
     /*
     * PIPE SECTION
     **/
+    // man 7 pipe: reads and writes less than 4096 bytes are atomic
     int pfd[2];
     if(pipe(pfd) == -1) {
         return -1;
@@ -115,7 +116,7 @@ int main(void) {
             int totalread = 0;
             int numread;
             for(;;) { //the pipe will tell us when we're done
-                //read from pipe to consumer_buffer
+                //read from pipe to consumer_buffer (blocks until pipe has data)
                 numread = read(pfd[0], &consumer_buffer[totalread], DATA_SIZE);
                 if(numread == 0) { //parent closed write end of pipe and read returned 0 for EOF signal
                     break; //get out of infinite for loop
@@ -137,6 +138,7 @@ int main(void) {
             //parent process
             close(pfd[0]); //close the read end
             for(int i = 0; i < BUFF_SIZE/DATA_SIZE; i++) {
+                //write to pipe from producer_buffer (blocks if pipe full, until pipe has room)
                 write(pfd[1], producer_buffer+(i*DATA_SIZE), DATA_SIZE);
             }
             close(pfd[1]); //close the write end (signals child EOF by read returning 0 instead of blocking)
@@ -216,11 +218,11 @@ int main(void) {
         int j;
 
         for(j = 0; j < BUFF_SIZE/DATA_SIZE; j++) {
-            sem_wait(sem_full); //waits for sem_full
+            sem_wait(sem_full); //waits for sem_full (parent releases after write is completed)
 
             memcpy(consumer_buffer+(j*DATA_SIZE), ptr, DATA_SIZE); //copy data from SHM to consumer_buffer
 
-            sem_post(sem_empty); //releases sem_empty
+            sem_post(sem_empty); //releases sem_empty (parent can now lock sem_empty to write another chunk)
         }
 
         //validate 4K transfer (validate_consumer returns 0 on success >0 on failure)
@@ -236,11 +238,11 @@ int main(void) {
         //parent process
         int j;
         for(j = 0; j < BUFF_SIZE/DATA_SIZE; j++) {
-            sem_wait(sem_empty); //waits for sem_empty
+            sem_wait(sem_empty); //waits for sem_empty (child releases after read is completed)
 
             memcpy(ptr, producer_buffer+(j*DATA_SIZE), DATA_SIZE); //copy data to SHM from producer_buffer
 
-            sem_post(sem_full); //releases sem_full
+            sem_post(sem_full); //releases sem_full (child can now lock sem_full to read chunk)
         }
         //wait for child
         waitpid(pid, NULL, 0);
