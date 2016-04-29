@@ -45,7 +45,8 @@ int main(void) {
     **/
     mqd_t msgq_id;
     //open the message queue
-    msgq_id = mq_open(p_msq_key, O_RDWR | O_CREAT | O_EXCL, S_IRWXU | S_IRWXG, NULL);
+    struct mq_attr attr = {0,10,DATA_SIZE,0,{0}};
+    msgq_id = mq_open(p_msq_key, O_RDWR | O_CREAT | O_EXCL, S_IRWXU | S_IRWXG, &attr);
     if(msgq_id == (mqd_t)-1) {
         //originally just error'd here
         //HOWEVER, if an error happens somewhere else and the message queue doesn't get unlinked (later)
@@ -70,9 +71,7 @@ int main(void) {
             //i guess this is ok since we know exactly how many messages we're waiting for...?
             for(int i = 0; i < BUFF_SIZE/DATA_SIZE; i++) {
                 //receive a message (blocks until message is available)
-                //also, i don't get the 10000 arg, man page doesn't really say much
-                //but 10000 is the number from the example and it doesn't cause random valgrind errors
-                mq_receive(msgq_id, consumer_buffer+(i*DATA_SIZE), 10000, NULL);
+                mq_receive(msgq_id, consumer_buffer+(i*DATA_SIZE), DATA_SIZE, NULL);
             }
             //validate 4K transfer (validate_consumer returns 0 on success >0 on failure)
             int test = validate_consumer(ground_truth, consumer_buffer);
